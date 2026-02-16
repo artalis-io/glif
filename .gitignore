@@ -1,0 +1,34 @@
+# Build artifacts
+*.o
+/ascii3d
+/gen_test_images
+tests/test_vec6
+tests/test_sampling
+tests/test_image
+tests/test_grid
+tests/test_contrast
+tests/test_match
+tests/test_font
+tests/test_output
+
+# Debug symbols
+*.dSYM/
+
+# Benchmark tool
+tools/bench
+
+# Test image generator
+tools/gen_test_images
+
+# macOS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Output files
+*.ppm
