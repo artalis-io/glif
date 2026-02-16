@@ -192,8 +192,8 @@ static int run_image(Config *cfg) {
         struct winsize ws;
         if (isatty(STDOUT_FILENO) && ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0
             && ws.ws_col > 0 && ws.ws_row > 0) {
-            cfg->cell_w = img.width / ws.ws_col;
-            cfg->cell_h = img.height / ws.ws_row;
+            cfg->cell_w = (img.width + ws.ws_col - 1) / ws.ws_col;
+            cfg->cell_h = (img.height + ws.ws_row - 1) / ws.ws_row;
             if (cfg->cell_w < 2) cfg->cell_w = 2;
             if (cfg->cell_h < 2) cfg->cell_h = 2;
             fprintf(stderr, "Auto-fit: %dx%d terminal, cell size %dx%d\n",
@@ -284,8 +284,8 @@ static int run_video(Config *cfg) {
         struct winsize ws;
         if (isatty(STDERR_FILENO) && ioctl(STDERR_FILENO, TIOCGWINSZ, &ws) == 0
             && ws.ws_col > 0 && ws.ws_row > 0) {
-            cfg->cell_w = w / ws.ws_col;
-            cfg->cell_h = h / (ws.ws_row - 1);  /* leave room for status line */
+            cfg->cell_w = (w + ws.ws_col - 1) / ws.ws_col;
+            cfg->cell_h = (h + ws.ws_row - 2) / (ws.ws_row - 1);
             if (cfg->cell_w < 2) cfg->cell_w = 2;
             if (cfg->cell_h < 2) cfg->cell_h = 2;
             fprintf(stderr, "Auto-fit: %dx%d terminal, cell size %dx%d\n",
