@@ -1,14 +1,14 @@
-# ASCII3D Roadmap
+# Glif Roadmap
 
 ## Video Mode (CLI, pure C)
 
 ### Decoding Strategy
 
-Don't link libavcodec. Pipe raw frames from ffmpeg — keeps ascii3d dependency-free:
+Don't link libavcodec. Pipe raw frames from ffmpeg — keeps glif dependency-free:
 
 ```bash
 ffmpeg -i movie.mp4 -f rawvideo -pix_fmt rgb24 -s 640x480 - | \
-  ./ascii3d --video 640 480 -f fonts/SFNSMono.ttf -c
+  ./glif --video 640 480 -f fonts/SFNSMono.ttf -c
 ```
 
 ### Pipeline
@@ -52,14 +52,14 @@ while (fread(frame_buf, 1, frame_size, stdin) == frame_size) {
 Strip out OS-dependent code — no file I/O, no OpenMP, no terminal detection. Export a clean frame-processing API:
 
 ```c
-// ascii3d_wasm.h — the WASM-exported API
+// glif_wasm.h — the WASM-exported API
 
 typedef struct {
     void *ctx;  // Opaque handle: font DB, sampling config, precomputed masks
-} Ascii3dContext;
+} GlifContext;
 
 // One-time init — JS passes font file bytes
-Ascii3dContext *ascii3d_init(const uint8_t *font_data, int font_len,
+GlifContext *glif_init(const uint8_t *font_data, int font_len,
                              int cell_w, int cell_h,
                              float dir_crunch, float global_crunch);
 
@@ -68,12 +68,12 @@ Ascii3dContext *ascii3d_init(const uint8_t *font_data, int font_len,
 // out_chars: output character grid (rows * cols bytes)
 // out_r/g/b: output color per cell (rows * cols bytes each)
 // Returns: rows | (cols << 16)
-int ascii3d_process_frame(Ascii3dContext *ctx,
+int glif_process_frame(GlifContext *ctx,
                           const uint8_t *pixels, int w, int h,
                           char *out_chars,
                           uint8_t *out_r, uint8_t *out_g, uint8_t *out_b);
 
-void ascii3d_free(Ascii3dContext *ctx);
+void glif_free(GlifContext *ctx);
 ```
 
 ### Build
@@ -82,9 +82,9 @@ void ascii3d_free(Ascii3dContext *ctx);
 # Emscripten
 wasm-emcc:
 	emcc -O2 -Ivendor -Isrc \
-	  -s EXPORTED_FUNCTIONS='["_ascii3d_init","_ascii3d_process_frame","_ascii3d_free"]' \
+	  -s EXPORTED_FUNCTIONS='["_glif_init","_glif_process_frame","_glif_free"]' \
 	  -s ALLOW_MEMORY_GROWTH=1 \
-	  -o ascii3d.js \
+	  -o glif.js \
 	  src/wasm_api.c src/image.c src/sampling.c src/grid.c \
 	  src/font.c src/contrast.c src/match.c
 ```
@@ -98,7 +98,7 @@ const video = document.createElement('video');
 const stream = await navigator.mediaDevices.getUserMedia({ video: true });
 video.srcObject = stream;
 
-const ctx = ascii3d_init(fontBytes, fontBytes.length, 10, 20, 2.0, 2.0);
+const ctx = glif_init(fontBytes, fontBytes.length, 10, 20, 2.0, 2.0);
 
 const capture = new OffscreenCanvas(640, 480);
 const captureCtx = capture.getContext('2d');
@@ -109,7 +109,7 @@ function frame() {
     const rgb = rgbaToRgb(imageData.data);
 
     wasmMemory.set(rgb, pixelPtr);
-    ascii3d_process_frame(ctx, pixelPtr, 640, 480, charsPtr, rPtr, gPtr, bPtr);
+    glif_process_frame(ctx, pixelPtr, 640, 480, charsPtr, rPtr, gPtr, bPtr);
 
     renderToCanvas(chars, r, g, b, cols, rows);
     requestAnimationFrame(frame);

@@ -66,7 +66,7 @@ UTEST(output, ppm_writes_valid_header) {
 
     Grid grid = make_test_grid(3, 4, 10, 20, 'A');
 
-    const char *path = "/tmp/ascii3d_test_header.ppm";
+    const char *path = "/tmp/glif_test_header.ppm";
     ret = output_ppm(&grid, &db, path, 1, 0);
     ASSERT_EQ(ret, 0);
 
@@ -99,8 +99,8 @@ UTEST(output, ppm_scale1_vs_scale4_different_sizes) {
 
     Grid grid = make_test_grid(2, 3, 10, 20, 'X');
 
-    const char *path1 = "/tmp/ascii3d_test_scale1.ppm";
-    const char *path4 = "/tmp/ascii3d_test_scale4.ppm";
+    const char *path1 = "/tmp/glif_test_scale1.ppm";
+    const char *path4 = "/tmp/glif_test_scale4.ppm";
 
     ret = output_ppm(&grid, &db, path1, 1, 0);
     ASSERT_EQ(ret, 0);
@@ -141,7 +141,7 @@ UTEST(output, ppm_file_size_matches_expected) {
     int rows = 2, cols = 3, cell_w = 10, cell_h = 20, scale = 1;
     Grid grid = make_test_grid(rows, cols, cell_w, cell_h, 'H');
 
-    const char *path = "/tmp/ascii3d_test_size.ppm";
+    const char *path = "/tmp/glif_test_size.ppm";
     ret = output_ppm(&grid, &db, path, scale, 0);
     ASSERT_EQ(ret, 0);
 
@@ -173,7 +173,7 @@ UTEST(output, ppm_file_size_matches_expected) {
 UTEST(output, plain_correct_lines_and_columns) {
     Grid grid = make_test_grid(3, 5, 10, 20, 'Q');
 
-    const char *path = "/tmp/ascii3d_test_plain.txt";
+    const char *path = "/tmp/glif_test_plain.txt";
     ASSERT_EQ(capture_plain_output(&grid, path), 0);
 
     /* Read back and verify */
@@ -212,7 +212,7 @@ UTEST(output, plain_roundtrip_known_chars) {
         grid.cells[i].ch = expected_chars[i];
     }
 
-    const char *path = "/tmp/ascii3d_test_roundtrip.txt";
+    const char *path = "/tmp/glif_test_roundtrip.txt";
     ASSERT_EQ(capture_plain_output(&grid, path), 0);
 
     /* Read back */
@@ -249,7 +249,7 @@ UTEST(output, ppm_with_scale4_file_size) {
     int rows = 2, cols = 3, cell_w = 10, cell_h = 20, scale = 4;
     Grid grid = make_test_grid(rows, cols, cell_w, cell_h, 'W');
 
-    const char *path = "/tmp/ascii3d_test_size4.ppm";
+    const char *path = "/tmp/glif_test_size4.ppm";
     ret = output_ppm(&grid, &db, path, scale, 0);
     ASSERT_EQ(ret, 0);
 

@@ -1,4 +1,4 @@
-# ASCII3D
+# Glif
 
 Shape-based ASCII art renderer in C. Implements the rendering technique from [Alex Harri's article](https://alexharri.com/blog/ascii-rendering) — treating ASCII characters as **6D shape vectors** sampled from circles rather than single brightness values.
 
@@ -32,19 +32,19 @@ A debug build with AddressSanitizer/UBSan is available via `make debug`.
 
 ```bash
 # Plain ASCII output
-./ascii3d photo.png -f fonts/MyMono.ttf
+./glif photo.png -f fonts/MyMono.ttf
 
 # ANSI truecolor output
-./ascii3d photo.png -f fonts/MyMono.ttf -c
+./glif photo.png -f fonts/MyMono.ttf -c
 
 # PPM image output
-./ascii3d photo.png -f fonts/MyMono.ttf -o output.ppm
+./glif photo.png -f fonts/MyMono.ttf -o output.ppm
 
 # Auto-fit to terminal size
-./ascii3d photo.png -f fonts/MyMono.ttf -a
+./glif photo.png -f fonts/MyMono.ttf -a
 
 # Custom cell size and contrast
-./ascii3d photo.png -f fonts/MyMono.ttf -w 8 -h 16 -d 2.0 -g 2.0
+./glif photo.png -f fonts/MyMono.ttf -w 8 -h 16 -d 2.0 -g 2.0
 ```
 
 You need to provide a monospace TTF font via `-f`. Any monospace font works — the font's glyph shapes directly affect output quality.
@@ -68,25 +68,25 @@ You need to provide a monospace TTF font via `-f`. Any monospace font works — 
 
 ```bash
 # High-res, high character count — small cells = more detail
-./ascii3d photo.png -f fonts/SFNSMono.ttf -w 4 -h 8 -d 2.0 -g 2.0
+./glif photo.png -f fonts/SFNSMono.ttf -w 4 -h 8 -d 2.0 -g 2.0
 
 # Same, with PPM image output (scale 4 for crisp glyphs)
-./ascii3d photo.png -f fonts/SFNSMono.ttf -w 4 -h 8 -d 2.0 -g 2.0 -o out.ppm -s 4
+./glif photo.png -f fonts/SFNSMono.ttf -w 4 -h 8 -d 2.0 -g 2.0 -o out.ppm -s 4
 
 # Modern terminal (120×40) with ANSI truecolor
-./ascii3d photo.png -f fonts/SFNSMono.ttf -w 9 -h 18 -c
+./glif photo.png -f fonts/SFNSMono.ttf -w 9 -h 18 -c
 
 # Auto-fit to current terminal size
-./ascii3d photo.png -f fonts/SFNSMono.ttf -a -c
+./glif photo.png -f fonts/SFNSMono.ttf -a -c
 
 # Classic 80×24 terminal
-./ascii3d photo.png -f fonts/SFNSMono.ttf -w 14 -h 31
+./glif photo.png -f fonts/SFNSMono.ttf -w 14 -h 31
 
 # Cranked contrast for line art / high-contrast images
-./ascii3d diagram.png -f fonts/SFNSMono.ttf -d 3.0 -g 3.0
+./glif diagram.png -f fonts/SFNSMono.ttf -d 3.0 -g 3.0
 
 # Different fonts change the output character — experiment!
-./ascii3d photo.png -f fonts/GeistMono-Regular.ttf -w 6 -h 12 -c
+./glif photo.png -f fonts/GeistMono-Regular.ttf -w 6 -h 12 -c
 ```
 
 Cell size controls the resolution/detail trade-off: smaller cells = more characters = finer detail. Directional crunch (`-d`) sharpens edges; global crunch (`-g`) increases overall contrast. Both default to moderate values — push them to 2.0–3.0 for sharper results.

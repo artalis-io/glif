@@ -15,7 +15,7 @@ DEBUG_LDFLAGS = -lm -fsanitize=address,undefined
 SRC = src/main.c src/image.c src/sampling.c src/grid.c src/font.c \
       src/contrast.c src/match.c src/output.c
 OBJ = $(SRC:.c=.o)
-BIN = ascii3d
+BIN = glif
 
 # Library objects (everything except main.o)
 LIB_OBJ = src/image.o src/sampling.o src/grid.o src/font.o \

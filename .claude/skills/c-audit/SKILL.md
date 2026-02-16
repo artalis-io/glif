@@ -6,7 +6,7 @@ user-invocable: true
 
 # C Code Audit Skill
 
-Perform comprehensive security, safety, and quality audits on ascii3d C code.
+Perform comprehensive security, safety, and quality audits on glif C code.
 
 **Target:** $ARGUMENTS (default: all `src/` files)
 
@@ -109,7 +109,7 @@ data[index] = value;
 | Error paths | Resources freed on all exit paths |
 | I/O return values | `fwrite`/`fread` return values checked |
 
-**ascii3d Cleanup Pattern:**
+**glif Cleanup Pattern:**
 ```c
 // Every _create()/_load() must have matching _free()
 image_load()           -> image_free()
@@ -139,7 +139,7 @@ if (width > 0 && height > SIZE_MAX / (size_t)width) {
 }
 ```
 
-**Key areas in ascii3d:**
+**Key areas in glif:**
 - Image buffer allocations (`width * height * channels`)
 - Grid cell arrays (`rows * cols * sizeof(GridCell)`)
 - PPM output buffers (`img_w * img_h * 3`)
@@ -148,7 +148,7 @@ if (width > 0 && height > SIZE_MAX / (size_t)width) {
 
 ### 5. OpenMP Thread Safety
 
-ascii3d uses OpenMP for parallelism. Check for data races.
+glif uses OpenMP for parallelism. Check for data races.
 
 | Issue | Severity | Pattern |
 |-------|----------|---------|
@@ -289,7 +289,7 @@ When `/c-audit` is invoked:
 ## Report Format
 
 ```markdown
-## C Audit Report: ascii3d
+## C Audit Report: glif
 
 **Date:** YYYY-MM-DD
 **Files Scanned:** N

@@ -30,7 +30,7 @@ UTEST(font, create_fails_with_nonexistent_font) {
 
 UTEST(font, create_fails_with_invalid_font_data) {
     /* Create a temporary file with garbage data */
-    FILE *f = fopen("/tmp/ascii3d_test_badfont.ttf", "wb");
+    FILE *f = fopen("/tmp/glif_test_badfont.ttf", "wb");
     ASSERT_TRUE(f != NULL);
     const char *garbage = "this is not a valid font file at all";
     fwrite(garbage, 1, strlen(garbage), f);
@@ -40,10 +40,10 @@ UTEST(font, create_fails_with_invalid_font_data) {
     sampling_config_init(&sc);
 
     CharDatabase db;
-    int ret = char_db_create(&db, "/tmp/ascii3d_test_badfont.ttf", 10, 20, &sc);
+    int ret = char_db_create(&db, "/tmp/glif_test_badfont.ttf", 10, 20, &sc);
     ASSERT_NE(ret, 0);
 
-    remove("/tmp/ascii3d_test_badfont.ttf");
+    remove("/tmp/glif_test_badfont.ttf");
 }
 
 UTEST(font, space_has_zero_shape_vector) {

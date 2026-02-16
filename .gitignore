@@ -1,6 +1,6 @@
 # Build artifacts
 *.o
-/ascii3d
+/glif
 /gen_test_images
 tests/test_vec6
 tests/test_sampling
