@@ -63,6 +63,28 @@ You need to provide a monospace TTF font via `-f`. Any monospace font works — 
 | `-o, --output <file>` | Write PPM image file | — |
 | `-s, --scale <n>` | PPM render scale for sharp text | 4 |
 | `--dark` | PPM: black background + colored glyphs | off |
+| `--video <W> <H>` | Video mode: read raw RGB24 frames from stdin | — |
+| `--fps <n>` | Frame rate for video playback | 30 |
+
+## Video Mode
+
+Pipe raw RGB24 frames from ffmpeg to render video as live ASCII art:
+
+```bash
+# Color ASCII video, auto-fit to terminal
+ffmpeg -i video.mp4 -f rawvideo -pix_fmt rgb24 -s 320x240 - 2>/dev/null | \
+  ./glif --video 320 240 -f fonts/SFNSMono.ttf -c -a --fps 30
+
+# Higher resolution input for more detail
+ffmpeg -i video.mp4 -f rawvideo -pix_fmt rgb24 -s 640x480 - 2>/dev/null | \
+  ./glif --video 640 480 -f fonts/SFNSMono.ttf -c -a --fps 30
+
+# Plain ASCII (no color)
+ffmpeg -i video.mp4 -f rawvideo -pix_fmt rgb24 -s 320x240 - 2>/dev/null | \
+  ./glif --video 320 240 -f fonts/SFNSMono.ttf -a --fps 24
+```
+
+The `--video W H` flag tells glif to read raw RGB24 frames of size W×H from stdin. Combine with `-a` to auto-fit the grid to your terminal. Frame pacing ensures smooth playback at the specified `--fps`. On exit, glif reports total frames played and average FPS.
 
 ## Examples
 

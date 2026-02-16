@@ -24,6 +24,34 @@ void output_ansi(const Grid *grid) {
     printf("\033[0m");
 }
 
+void output_ansi_inplace(const Grid *grid) {
+    /* Build entire frame in a buffer, then write once to minimize flicker */
+    /* Worst case per cell: \033[38;2;RRR;GGG;BBBmC = ~24 bytes */
+    /* Per row: add \033[0m\n = 5 bytes. Plus header \033[H = 3 bytes */
+    size_t bufsize = (size_t)(grid->rows * grid->cols) * 24
+                   + (size_t)grid->rows * 6 + 16;
+    char *buf = malloc(bufsize);
+    if (!buf) return;
+
+    char *p = buf;
+    /* Cursor home */
+    *p++ = '\033'; *p++ = '['; *p++ = 'H';
+
+    for (int r = 0; r < grid->rows; r++) {
+        for (int c = 0; c < grid->cols; c++) {
+            const GridCell *cell = &grid->cells[r * grid->cols + c];
+            p += sprintf(p, "\033[38;2;%d;%d;%dm%c",
+                         cell->r, cell->g, cell->b, cell->ch);
+        }
+        *p++ = '\033'; *p++ = '['; *p++ = '0'; *p++ = 'm'; *p++ = '\n';
+    }
+    *p++ = '\033'; *p++ = '['; *p++ = '0'; *p++ = 'm';
+
+    fwrite(buf, 1, (size_t)(p - buf), stdout);
+    fflush(stdout);
+    free(buf);
+}
+
 int output_ppm(const Grid *grid, const CharDatabase *db,
                const char *path, int scale, int dark_mode) {
     if (!grid || !grid->cells || !db || !path) return -1;
