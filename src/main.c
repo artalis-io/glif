@@ -22,6 +22,7 @@ typedef struct {
     int color;  /* ANSI truecolor */
     int scale;  /* PPM render scale */
     int auto_fit;  /* auto-fit to terminal size */
+    int dark_mode; /* PPM: black bg + colored glyphs */
 } Config;
 
 static void usage(const char *prog) {
@@ -38,6 +39,7 @@ static void usage(const char *prog) {
         "  -o, --output <file.ppm>  Write PPM image file\n"
         "  -a, --auto-fit           Fit output to terminal size\n"
         "  -s, --scale <n>          PPM render scale (default: 4)\n"
+        "  --dark                   PPM: black bg + colored glyphs\n"
         "  --help                   Show this message\n",
         prog);
 }
@@ -53,6 +55,7 @@ static int parse_args(Config *cfg, int argc, char **argv) {
     cfg->color = 0;
     cfg->scale = 4;
     cfg->auto_fit = 0;
+    cfg->dark_mode = 0;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--help") == 0) {
@@ -93,6 +96,8 @@ static int parse_args(Config *cfg, int argc, char **argv) {
                 fprintf(stderr, "error: invalid global-crunch '%s'\n", argv[i]); return -1;
             }
             cfg->global_crunch = val;
+        } else if (strcmp(argv[i], "--dark") == 0) {
+            cfg->dark_mode = 1;
         } else if (strcmp(argv[i], "-a") == 0 || strcmp(argv[i], "--auto-fit") == 0) {
             cfg->auto_fit = 1;
         } else if (strcmp(argv[i], "-c") == 0 || strcmp(argv[i], "--color") == 0) {
@@ -225,7 +230,7 @@ int main(int argc, char **argv) {
 
     /* 11. Output */
     if (cfg.output_path) {
-        if (output_ppm(&grid, &db, cfg.output_path, cfg.scale) != 0) {
+        if (output_ppm(&grid, &db, cfg.output_path, cfg.scale, cfg.dark_mode) != 0) {
             fprintf(stderr, "error: failed to write PPM file\n");
         } else {
             fprintf(stderr, "Wrote %s (%zux%zu)\n", cfg.output_path,

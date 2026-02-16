@@ -10,9 +10,11 @@ void output_plain(const Grid *grid);
 /* Print ANSI truecolor ASCII to stdout. */
 void output_ansi(const Grid *grid);
 
-/* Write PPM image file with colored glyph rendering.
- * scale > 1 uses high-res render bitmaps for sharp text. */
+/* Write PPM image file with glyph rendering.
+ * scale > 1 uses high-res render bitmaps for sharp text.
+ * dark_mode: 0 = color background + white glyphs (default)
+ *            1 = black background + colored glyphs */
 int output_ppm(const Grid *grid, const CharDatabase *db,
-               const char *path, int scale);
+               const char *path, int scale, int dark_mode);
 
 #endif

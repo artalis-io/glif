@@ -67,7 +67,7 @@ UTEST(output, ppm_writes_valid_header) {
     Grid grid = make_test_grid(3, 4, 10, 20, 'A');
 
     const char *path = "/tmp/ascii3d_test_header.ppm";
-    ret = output_ppm(&grid, &db, path, 1);
+    ret = output_ppm(&grid, &db, path, 1, 0);
     ASSERT_EQ(ret, 0);
 
     /* Read back the file and verify PPM header */
@@ -102,9 +102,9 @@ UTEST(output, ppm_scale1_vs_scale4_different_sizes) {
     const char *path1 = "/tmp/ascii3d_test_scale1.ppm";
     const char *path4 = "/tmp/ascii3d_test_scale4.ppm";
 
-    ret = output_ppm(&grid, &db, path1, 1);
+    ret = output_ppm(&grid, &db, path1, 1, 0);
     ASSERT_EQ(ret, 0);
-    ret = output_ppm(&grid, &db, path4, 4);
+    ret = output_ppm(&grid, &db, path4, 4, 0);
     ASSERT_EQ(ret, 0);
 
     /* Compare file sizes */
@@ -142,7 +142,7 @@ UTEST(output, ppm_file_size_matches_expected) {
     Grid grid = make_test_grid(rows, cols, cell_w, cell_h, 'H');
 
     const char *path = "/tmp/ascii3d_test_size.ppm";
-    ret = output_ppm(&grid, &db, path, scale);
+    ret = output_ppm(&grid, &db, path, scale, 0);
     ASSERT_EQ(ret, 0);
 
     /* Calculate expected pixel data size */
@@ -250,7 +250,7 @@ UTEST(output, ppm_with_scale4_file_size) {
     Grid grid = make_test_grid(rows, cols, cell_w, cell_h, 'W');
 
     const char *path = "/tmp/ascii3d_test_size4.ppm";
-    ret = output_ppm(&grid, &db, path, scale);
+    ret = output_ppm(&grid, &db, path, scale, 0);
     ASSERT_EQ(ret, 0);
 
     int img_w = cols * cell_w * scale;
@@ -286,7 +286,7 @@ UTEST(output, ppm_invalid_path_fails) {
     Grid grid = make_test_grid(1, 1, 10, 20, 'X');
 
     /* Try writing to a nonexistent directory */
-    ret = output_ppm(&grid, &db, "/nonexistent_dir/test.ppm", 1);
+    ret = output_ppm(&grid, &db, "/nonexistent_dir/test.ppm", 1, 0);
     ASSERT_NE(ret, 0);
 
     free(grid.cells);

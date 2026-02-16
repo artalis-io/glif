@@ -25,7 +25,7 @@ void output_ansi(const Grid *grid) {
 }
 
 int output_ppm(const Grid *grid, const CharDatabase *db,
-               const char *path, int scale) {
+               const char *path, int scale, int dark_mode) {
     if (!grid || !grid->cells || !db || !path) return -1;
     if (scale < 1) scale = 1;
     if (scale > 64) scale = 64;
@@ -80,9 +80,17 @@ int output_ppm(const Grid *grid, const CharDatabase *db,
 
                     float alpha = bmp ? bmp[y * bw + x] / 255.0f : 0.0f;
                     uint8_t *dst = pixels + (py * img_w + px) * 3;
-                    dst[0] = (uint8_t)(cell->r * alpha);
-                    dst[1] = (uint8_t)(cell->g * alpha);
-                    dst[2] = (uint8_t)(cell->b * alpha);
+                    if (dark_mode) {
+                        /* Black background, colored glyphs */
+                        dst[0] = (uint8_t)(cell->r * alpha);
+                        dst[1] = (uint8_t)(cell->g * alpha);
+                        dst[2] = (uint8_t)(cell->b * alpha);
+                    } else {
+                        /* Color background, white glyphs */
+                        dst[0] = (uint8_t)(cell->r + (255 - cell->r) * alpha);
+                        dst[1] = (uint8_t)(cell->g + (255 - cell->g) * alpha);
+                        dst[2] = (uint8_t)(cell->b + (255 - cell->b) * alpha);
+                    }
                 }
             }
         }

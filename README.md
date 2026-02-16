@@ -62,6 +62,7 @@ You need to provide a monospace TTF font via `-f`. Any monospace font works — 
 | `-c, --color` | ANSI truecolor terminal output | off |
 | `-o, --output <file>` | Write PPM image file | — |
 | `-s, --scale <n>` | PPM render scale for sharp text | 4 |
+| `--dark` | PPM: black background + colored glyphs | off |
 
 ## Examples
 
