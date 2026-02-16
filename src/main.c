@@ -370,7 +370,7 @@ static int run_video(Config *cfg) {
 
         /* Render */
         if (cfg->color) {
-            output_ansi_inplace(&grid);
+            output_ansi_inplace(&grid, cfg->dark_mode);
         } else {
             printf("\033[H");
             output_plain(&grid);

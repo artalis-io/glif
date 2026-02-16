@@ -24,11 +24,11 @@ void output_ansi(const Grid *grid) {
     printf("\033[0m");
 }
 
-void output_ansi_inplace(const Grid *grid) {
+void output_ansi_inplace(const Grid *grid, int dark_mode) {
     /* Build entire frame in a buffer, then write once to minimize flicker */
-    /* Worst case per cell: \033[38;2;RRR;GGG;BBBmC = ~24 bytes */
+    /* Worst case per cell: \033[48;2;RRR;GGG;BBBm\033[38;2;255;255;255mC = ~48 bytes */
     /* Per row: add \033[0m\n = 5 bytes. Plus header \033[H = 3 bytes */
-    size_t bufsize = (size_t)(grid->rows * grid->cols) * 24
+    size_t bufsize = (size_t)(grid->rows * grid->cols) * 48
                    + (size_t)grid->rows * 6 + 16;
     char *buf = malloc(bufsize);
     if (!buf) return;
@@ -40,8 +40,13 @@ void output_ansi_inplace(const Grid *grid) {
     for (int r = 0; r < grid->rows; r++) {
         for (int c = 0; c < grid->cols; c++) {
             const GridCell *cell = &grid->cells[r * grid->cols + c];
-            p += sprintf(p, "\033[38;2;%d;%d;%dm%c",
-                         cell->r, cell->g, cell->b, cell->ch);
+            if (dark_mode) {
+                p += sprintf(p, "\033[38;2;%d;%d;%dm%c",
+                             cell->r, cell->g, cell->b, cell->ch);
+            } else {
+                p += sprintf(p, "\033[48;2;%d;%d;%dm\033[38;2;255;255;255m%c",
+                             cell->r, cell->g, cell->b, cell->ch);
+            }
         }
         *p++ = '\033'; *p++ = '['; *p++ = '0'; *p++ = 'm'; *p++ = '\n';
     }
