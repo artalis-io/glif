@@ -194,6 +194,50 @@ void main() {
 
 CPU does the computation (small irregular workload with branching and lookup tables). GPU does the rendering (millions of pixels with a font atlas). Interface between them is ~20KB/frame.
 
+## Video Mode Optimizations
+
+### Diff-Based Rendering
+
+The current renderer emits ANSI escape codes for every cell every frame. For slow-panning or mostly-static video, 80%+ of cells are unchanged between frames. A diff-based renderer would:
+
+1. Keep previous frame's grid in memory
+2. Compare each cell (char + r + g + b) against the previous frame
+3. Only emit ANSI codes for changed cells, using cursor positioning (`\033[row;colH`) to skip unchanged regions
+
+This drastically reduces bytes sent to the terminal — the real bottleneck in video mode.
+
+### `.glif` Binary Format
+
+Compact per-frame storage for offline capture and WebGL replay:
+
+```
+Header (16 bytes):
+  magic:  "GLIF"    (4 bytes)
+  cols:   uint16    (2)
+  rows:   uint16    (2)
+  fps:    float32   (4)
+  frames: uint32    (4)
+
+Per frame (cols × rows × 4 bytes):
+  [ch, r, g, b] per cell
+```
+
+At 120×40 = 4,800 cells × 4 bytes = **19.2 KB/frame**. At 30 fps: ~576 KB/s, ~34 MB/min. Trivially streamable. A WebGL renderer reads the grid per frame and draws instanced glyphs from a font atlas.
+
+Delta compression (flag byte + only changed cells) could shrink this significantly for typical video content.
+
+### Re-encoding to Video via ffmpeg
+
+Add a `--pipe-ppm` flag that writes raw PPM frames to stdout instead of ANSI terminal output. Each frame gets the full font-rendered glyph treatment from the existing PPM path:
+
+```bash
+ffmpeg -i input.mp4 -f rawvideo -pix_fmt rgb24 -s 640x480 - 2>/dev/null | \
+  ./glif --video 640 480 -f fonts/SFNSMono.ttf --pipe-ppm | \
+  ffmpeg -f image2pipe -framerate 30 -i - -c:v libx264 -pix_fmt yuv420p output.mp4
+```
+
+This produces a real video file where each frame is a pixel-perfect ASCII art render — shareable on YouTube, social media, etc.
+
 ## Expected Performance
 
 | Platform | Grid size | Throughput |
