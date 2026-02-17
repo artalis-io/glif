@@ -4,6 +4,7 @@
 #include "grid.h"
 #include "font.h"
 #include <stddef.h>
+#include <stdio.h>
 
 /* Print plain ASCII to stdout. */
 void output_plain(const Grid *grid);
@@ -48,5 +49,39 @@ int ppm_pipe_init(PpmPipe *pp, const Grid *grid, const CharDatabase *db,
                   int scale, int dark_mode);
 void ppm_pipe_frame(PpmPipe *pp, const Grid *grid, const CharDatabase *db);
 void ppm_pipe_free(PpmPipe *pp);
+
+/* .glif binary format — compact per-frame storage for offline capture & replay.
+ *
+ * Header (24 bytes):
+ *   magic:    "GLIF"   (4 bytes)
+ *   version:  uint8    (1) — format version (currently 1)
+ *   flags:    uint8    (1) — bit 0: dark_mode
+ *   cols:     uint16   (2) — grid columns
+ *   rows:     uint16   (2) — grid rows
+ *   cell_w:   uint16   (2) — cell width in pixels
+ *   cell_h:   uint16   (2) — cell height in pixels
+ *   fps:      float32  (4) — framerate
+ *   frames:   uint32   (4) — total frame count (written on finish)
+ *   reserved: uint16   (2) — padding (zero)
+ *
+ * Per frame (cols × rows × 4 bytes):
+ *   [ch, r, g, b] per cell
+ */
+#define GLIF_MAGIC "GLIF"
+#define GLIF_VERSION 1
+#define GLIF_HEADER_SIZE 24
+#define GLIF_FLAG_DARK 0x01
+
+typedef struct {
+    FILE *file;
+    uint32_t frames;
+    int cells;        /* cols × rows */
+} GlifWriter;
+
+int  glif_writer_init(GlifWriter *gw, const char *path,
+                      int cols, int rows, int cell_w, int cell_h,
+                      float fps, int dark_mode);
+void glif_writer_frame(GlifWriter *gw, const Grid *grid);
+int  glif_writer_finish(GlifWriter *gw);
 
 #endif

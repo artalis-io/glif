@@ -25,14 +25,14 @@ void output_ansi(const Grid *grid) {
 }
 
 int frame_diff_init(FrameDiff *fd, int rows, int cols) {
-    int cells = rows * cols;
+    size_t cells = (size_t)rows * (size_t)cols;
     /* Worst case: every cell changed, ~48 bytes per cell + cursor moves */
-    fd->bufsize = (size_t)cells * 60 + (size_t)rows * 6 + 16;
+    fd->bufsize = cells * 64 + (size_t)rows * 8 + 32;
     fd->buf = malloc(fd->bufsize);
     if (!fd->buf) return -1;
-    fd->prev = calloc((size_t)cells, 4);  /* zeroed — first frame renders all */
+    fd->prev = calloc(cells, 4);  /* zeroed — first frame renders all */
     if (!fd->prev) { free(fd->buf); fd->buf = NULL; return -1; }
-    fd->cells = cells;
+    fd->cells = (int)cells;
     fd->cols = cols;
     return 0;
 }
@@ -329,4 +329,75 @@ void ppm_pipe_free(PpmPipe *pp) {
     }
     pp->pixels = NULL;
     pp->render_bmps = NULL;
+}
+
+/* ---- .glif binary format ---- */
+
+static void write_u8(FILE *f, uint8_t v)  { fwrite(&v, 1, 1, f); }
+static void write_u16(FILE *f, uint16_t v) {
+    uint8_t buf[2] = { (uint8_t)(v & 0xFF), (uint8_t)(v >> 8) };
+    fwrite(buf, 1, 2, f);
+}
+static void write_u32(FILE *f, uint32_t v) {
+    uint8_t buf[4] = { (uint8_t)(v), (uint8_t)(v >> 8),
+                        (uint8_t)(v >> 16), (uint8_t)(v >> 24) };
+    fwrite(buf, 1, 4, f);
+}
+static void write_f32(FILE *f, float v) {
+    uint32_t bits;
+    memcpy(&bits, &v, 4);
+    write_u32(f, bits);
+}
+
+int glif_writer_init(GlifWriter *gw, const char *path,
+                     int cols, int rows, int cell_w, int cell_h,
+                     float fps, int dark_mode) {
+    if (cols > 65535 || rows > 65535 || cell_w > 65535 || cell_h > 65535) {
+        fprintf(stderr, "error: grid dimensions too large for .glif format\n");
+        return -1;
+    }
+    gw->file = fopen(path, "wb");
+    if (!gw->file) {
+        fprintf(stderr, "error: cannot open '%s' for writing\n", path);
+        return -1;
+    }
+    gw->frames = 0;
+    gw->cells = cols * rows;
+
+    /* Write header (24 bytes) */
+    fwrite(GLIF_MAGIC, 1, 4, gw->file);          /* magic */
+    write_u8(gw->file, GLIF_VERSION);             /* version */
+    write_u8(gw->file, dark_mode ? GLIF_FLAG_DARK : 0); /* flags */
+    write_u16(gw->file, (uint16_t)cols);           /* cols */
+    write_u16(gw->file, (uint16_t)rows);           /* rows */
+    write_u16(gw->file, (uint16_t)cell_w);         /* cell_w */
+    write_u16(gw->file, (uint16_t)cell_h);         /* cell_h */
+    write_f32(gw->file, fps);                      /* fps */
+    write_u32(gw->file, 0);                        /* frames (placeholder) */
+    write_u16(gw->file, 0);                        /* reserved */
+
+    return 0;
+}
+
+void glif_writer_frame(GlifWriter *gw, const Grid *grid) {
+    int total = grid->rows * grid->cols;
+    for (int i = 0; i < total; i++) {
+        const GridCell *cell = &grid->cells[i];
+        uint8_t data[4] = { (uint8_t)cell->ch, cell->r, cell->g, cell->b };
+        fwrite(data, 1, 4, gw->file);
+    }
+    gw->frames++;
+}
+
+int glif_writer_finish(GlifWriter *gw) {
+    if (!gw->file) return -1;
+
+    /* Seek back to frames field (offset 18) and write actual count */
+    if (fseek(gw->file, 18, SEEK_SET) == 0) {
+        write_u32(gw->file, gw->frames);
+    }
+
+    fclose(gw->file);
+    gw->file = NULL;
+    return 0;
 }

@@ -1,5 +1,6 @@
 #include "grid.h"
 #include <stdlib.h>
+#include <stdint.h>
 
 int grid_create(Grid *grid, const Image *img, int cell_w, int cell_h) {
     grid->cell_w = cell_w;
@@ -155,7 +156,7 @@ void grid_compute_colors(Grid *grid, const Image *img) {
     #pragma omp parallel for schedule(static)
     for (int ci = 0; ci < ncells; ci++) {
             GridCell *cell = &grid->cells[ci];
-            int rsum = 0, gsum = 0, bsum = 0, count = 0;
+            int64_t rsum = 0, gsum = 0, bsum = 0; int count = 0;
 
             for (int y = cell->py; y < cell->py + grid->cell_h && y < img->height; y++) {
                 for (int x = cell->px; x < cell->px + grid->cell_w && x < img->width; x++) {
@@ -167,9 +168,9 @@ void grid_compute_colors(Grid *grid, const Image *img) {
                 }
             }
             if (count > 0) {
-                cell->r = (uint8_t)(rsum / count);
-                cell->g = (uint8_t)(gsum / count);
-                cell->b = (uint8_t)(bsum / count);
+                cell->r = (uint8_t)(rsum / (int64_t)count);
+                cell->g = (uint8_t)(gsum / (int64_t)count);
+                cell->b = (uint8_t)(bsum / (int64_t)count);
             }
     }
 }

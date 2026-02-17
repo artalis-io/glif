@@ -637,4 +637,126 @@ UTEST(output, ppm_pipe_dark_vs_light_differ) {
     char_db_free(&db);
 }
 
+/* ---- GlifWriter tests ---- */
+
+/* Helper: read little-endian values from buffer */
+static uint16_t read_u16(const uint8_t *p) { return (uint16_t)(p[0] | (p[1] << 8)); }
+static uint32_t read_u32(const uint8_t *p) {
+    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) |
+           ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+}
+static float read_f32(const uint8_t *p) {
+    uint32_t bits = read_u32(p);
+    float v;
+    memcpy(&v, &bits, 4);
+    return v;
+}
+
+UTEST(output, glif_writer_header) {
+    const char *path = "/tmp/glif_test_header.glif";
+    GlifWriter gw;
+    int ret = glif_writer_init(&gw, path, 120, 40, 10, 20, 30.0f, 0);
+    ASSERT_EQ(ret, 0);
+    ret = glif_writer_finish(&gw);
+    ASSERT_EQ(ret, 0);
+
+    FILE *f = fopen(path, "rb");
+    ASSERT_TRUE(f != NULL);
+    uint8_t hdr[GLIF_HEADER_SIZE];
+    ASSERT_EQ(fread(hdr, 1, GLIF_HEADER_SIZE, f), (size_t)GLIF_HEADER_SIZE);
+    fclose(f);
+
+    ASSERT_EQ(memcmp(hdr, "GLIF", 4), 0);
+    ASSERT_EQ(hdr[4], GLIF_VERSION);
+    ASSERT_EQ(hdr[5], 0);  /* flags: no dark mode */
+    ASSERT_EQ(read_u16(hdr + 6), 120);
+    ASSERT_EQ(read_u16(hdr + 8), 40);
+    ASSERT_EQ(read_u16(hdr + 10), 10);  /* cell_w */
+    ASSERT_EQ(read_u16(hdr + 12), 20);  /* cell_h */
+    ASSERT_TRUE(read_f32(hdr + 14) > 29.9f && read_f32(hdr + 14) < 30.1f);
+    ASSERT_EQ(read_u32(hdr + 18), (uint32_t)0);  /* 0 frames */
+
+    remove(path);
+}
+
+UTEST(output, glif_writer_dark_flag) {
+    const char *path = "/tmp/glif_test_dark.glif";
+    GlifWriter gw;
+    ASSERT_EQ(glif_writer_init(&gw, path, 10, 5, 8, 16, 24.0f, 1), 0);
+    ASSERT_EQ(glif_writer_finish(&gw), 0);
+
+    FILE *f = fopen(path, "rb");
+    ASSERT_TRUE(f != NULL);
+    uint8_t hdr[GLIF_HEADER_SIZE];
+    fread(hdr, 1, GLIF_HEADER_SIZE, f);
+    fclose(f);
+
+    ASSERT_EQ(hdr[5] & GLIF_FLAG_DARK, GLIF_FLAG_DARK);
+
+    remove(path);
+}
+
+UTEST(output, glif_writer_frames_and_size) {
+    const char *path = "/tmp/glif_test_frames.glif";
+    int cols = 4, rows = 3;
+    Grid grid = make_test_grid(rows, cols, 10, 20, 'X');
+
+    GlifWriter gw;
+    ASSERT_EQ(glif_writer_init(&gw, path, cols, rows, 10, 20, 30.0f, 0), 0);
+    glif_writer_frame(&gw, &grid);
+    glif_writer_frame(&gw, &grid);
+    glif_writer_frame(&gw, &grid);
+    ASSERT_EQ(glif_writer_finish(&gw), 0);
+
+    /* Check file size: header + 3 frames × 12 cells × 4 bytes */
+    FILE *f = fopen(path, "rb");
+    ASSERT_TRUE(f != NULL);
+    fseek(f, 0, SEEK_END);
+    long size = ftell(f);
+    ASSERT_EQ(size, GLIF_HEADER_SIZE + 3 * cols * rows * 4);
+
+    /* Check frame count in header */
+    rewind(f);
+    uint8_t hdr[GLIF_HEADER_SIZE];
+    fread(hdr, 1, GLIF_HEADER_SIZE, f);
+    ASSERT_EQ(read_u32(hdr + 18), (uint32_t)3);
+
+    fclose(f);
+    remove(path);
+    free(grid.cells);
+}
+
+UTEST(output, glif_writer_frame_data_matches_grid) {
+    const char *path = "/tmp/glif_test_data.glif";
+    int cols = 2, rows = 2;
+    Grid grid = make_test_grid(rows, cols, 10, 20, 'A');
+    /* Set distinct values per cell */
+    grid.cells[0].ch = 'H'; grid.cells[0].r = 10; grid.cells[0].g = 20; grid.cells[0].b = 30;
+    grid.cells[1].ch = 'i'; grid.cells[1].r = 40; grid.cells[1].g = 50; grid.cells[1].b = 60;
+    grid.cells[2].ch = '!'; grid.cells[2].r = 70; grid.cells[2].g = 80; grid.cells[2].b = 90;
+    grid.cells[3].ch = '~'; grid.cells[3].r = 100; grid.cells[3].g = 110; grid.cells[3].b = 120;
+
+    GlifWriter gw;
+    ASSERT_EQ(glif_writer_init(&gw, path, cols, rows, 10, 20, 30.0f, 1), 0);
+    glif_writer_frame(&gw, &grid);
+    ASSERT_EQ(glif_writer_finish(&gw), 0);
+
+    /* Read frame data */
+    FILE *f = fopen(path, "rb");
+    ASSERT_TRUE(f != NULL);
+    fseek(f, GLIF_HEADER_SIZE, SEEK_SET);
+    uint8_t frame[16]; /* 4 cells × 4 bytes */
+    ASSERT_EQ(fread(frame, 1, 16, f), (size_t)16);
+    fclose(f);
+
+    /* Verify [ch, r, g, b] per cell */
+    ASSERT_EQ(frame[0], 'H'); ASSERT_EQ(frame[1], 10); ASSERT_EQ(frame[2], 20); ASSERT_EQ(frame[3], 30);
+    ASSERT_EQ(frame[4], 'i'); ASSERT_EQ(frame[5], 40); ASSERT_EQ(frame[6], 50); ASSERT_EQ(frame[7], 60);
+    ASSERT_EQ(frame[8], '!'); ASSERT_EQ(frame[9], 70); ASSERT_EQ(frame[10], 80); ASSERT_EQ(frame[11], 90);
+    ASSERT_EQ(frame[12], '~'); ASSERT_EQ(frame[13], 100); ASSERT_EQ(frame[14], 110); ASSERT_EQ(frame[15], 120);
+
+    remove(path);
+    free(grid.cells);
+}
+
 UTEST_MAIN();

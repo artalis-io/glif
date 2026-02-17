@@ -22,6 +22,10 @@ void image_free(Image *img);
 
 /* Compute relative luminance lightness map (0–1 per pixel). */
 int lightness_map_create(LightnessMap *lm, const Image *img);
+
+/* Recompute lightness values in-place (reuses lm->data buffer). */
+int lightness_map_update(LightnessMap *lm, const Image *img);
+
 void lightness_map_free(LightnessMap *lm);
 
 #endif

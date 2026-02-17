@@ -42,6 +42,26 @@ static void srgb_lut_init(void) {
     srgb_lut_ready = 1;
 }
 
+/* Recompute lightness values in-place (caller must provide pre-allocated lm->data).
+ * Used in video mode to avoid per-frame malloc/free. */
+int lightness_map_update(LightnessMap *lm, const Image *img) {
+    srgb_lut_init();
+
+    size_t npixels = (size_t)img->width * (size_t)img->height;
+    const uint8_t *pixels = img->pixels;
+    int channels = img->channels;
+    float *dest = lm->data;
+
+    #pragma omp parallel for schedule(static)
+    for (size_t i = 0; i < npixels; i++) {
+        const uint8_t *px = pixels + i * channels;
+        dest[i] = 0.2126f * srgb_lut[px[0]]
+                + 0.7152f * srgb_lut[px[1]]
+                + 0.0722f * srgb_lut[px[2]];
+    }
+    return 0;
+}
+
 int lightness_map_create(LightnessMap *lm, const Image *img) {
     srgb_lut_init();
 

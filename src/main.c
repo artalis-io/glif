@@ -29,6 +29,7 @@ typedef struct {
     int video_h;   /* video frame height */
     float fps;     /* target fps (0 = unlimited) */
     int pipe_ppm;  /* video: write PPM frames to stdout instead of ANSI */
+    const char *glif_path; /* video: write .glif binary file */
 } Config;
 
 static void usage(const char *prog) {
@@ -50,6 +51,7 @@ static void usage(const char *prog) {
         "  --video <W> <H>          Video mode: read raw RGB24 frames from stdin\n"
         "  --fps <n>                Target framerate for video mode (default: 30)\n"
         "  --pipe-ppm               Video: write PPM frames to stdout (for ffmpeg)\n"
+        "  --output-glif <path>     Video: write .glif binary capture file\n"
         "  --help                   Show this message\n",
         prog, prog);
 }
@@ -71,6 +73,7 @@ static int parse_args(Config *cfg, int argc, char **argv) {
     cfg->video_h = 0;
     cfg->fps = 30.0f;
     cfg->pipe_ppm = 0;
+    cfg->glif_path = NULL;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--help") == 0) {
@@ -137,6 +140,9 @@ static int parse_args(Config *cfg, int argc, char **argv) {
             cfg->dark_mode = 1;
         } else if (strcmp(argv[i], "--pipe-ppm") == 0) {
             cfg->pipe_ppm = 1;
+        } else if (strcmp(argv[i], "--output-glif") == 0) {
+            if (++i >= argc) { fprintf(stderr, "error: --output-glif requires path\n"); return -1; }
+            cfg->glif_path = argv[i];
         } else if (strcmp(argv[i], "-a") == 0 || strcmp(argv[i], "--auto-fit") == 0) {
             cfg->auto_fit = 1;
         } else if (strcmp(argv[i], "-c") == 0 || strcmp(argv[i], "--color") == 0) {
@@ -209,7 +215,7 @@ static int run_image(Config *cfg) {
     }
 
     /* 2. Compute lightness map */
-    LightnessMap lm;
+    LightnessMap lm = { .data = NULL };
     if (lightness_map_create(&lm, &img) != 0) {
         fprintf(stderr, "error: failed to create lightness map\n");
         image_free(&img);
@@ -353,6 +359,19 @@ static int run_video(Config *cfg) {
     /* Init renderers */
     FrameDiff fd = {0};
     PpmPipe pp = {0};
+    GlifWriter gw = {0};
+    if (cfg->glif_path) {
+        if (glif_writer_init(&gw, cfg->glif_path, cols, rows,
+                             cfg->cell_w, cfg->cell_h,
+                             cfg->fps, cfg->dark_mode) != 0) {
+            free(lm.data);
+            grid_free(&grid);
+            free(frame_buf);
+            char_db_free(&db);
+            sampling_precompute_free(&pm);
+            return 1;
+        }
+    }
     if (cfg->pipe_ppm) {
         if (ppm_pipe_init(&pp, &grid, &db, cfg->scale, cfg->dark_mode) != 0) {
             fprintf(stderr, "error: failed to allocate PPM pipe buffer\n");
@@ -377,8 +396,8 @@ static int run_video(Config *cfg) {
 
     fprintf(stderr, "Video: %dx%d @ %.0f fps, grid %dx%d (%d cells)\n",
             w, h, cfg->fps, cols, rows, cols * rows);
-    if (!cfg->pipe_ppm) {
-        /* Hide cursor, clear screen (not for PPM pipe — stdout is binary) */
+    int terminal_output = !cfg->pipe_ppm && !(cfg->glif_path && !cfg->color);
+    if (terminal_output) {
         printf("\033[?25l\033[2J");
         fflush(stdout);
     }
@@ -392,7 +411,7 @@ static int run_video(Config *cfg) {
         double t_frame_start = time_now();
 
         /* Recompute lightness map in-place */
-        lightness_map_create(&lm, &img);
+        if (lightness_map_update(&lm, &img) != 0) break;
 
         /* Pipeline */
         grid_compute_vectors_fast(&grid, &lm, &pm);
@@ -405,11 +424,13 @@ static int run_video(Config *cfg) {
         t_pipeline_total += t_render_start - t_frame_start;
 
         /* Render */
+        if (gw.file) glif_writer_frame(&gw, &grid);
+
         if (cfg->pipe_ppm) {
             ppm_pipe_frame(&pp, &grid, &db);
         } else if (cfg->color) {
             frame_diff_render(&fd, &grid, cfg->dark_mode);
-        } else {
+        } else if (!cfg->glif_path) {
             printf("\033[H");
             output_plain(&grid);
             fflush(stdout);
@@ -433,8 +454,8 @@ static int run_video(Config *cfg) {
 
     double t_total = time_now() - t_start;
 
-    /* Show cursor, reset colors (not for PPM pipe) */
-    if (!cfg->pipe_ppm) {
+    /* Show cursor, reset colors */
+    if (terminal_output) {
         printf("\033[?25h\033[0m");
         fflush(stdout);
     }
@@ -448,6 +469,11 @@ static int run_video(Config *cfg) {
     }
 
     /* Cleanup */
+    if (gw.file) {
+        glif_writer_finish(&gw);
+        fprintf(stderr, "Wrote %s (%u frames, %d×%d grid, %.1f fps)\n",
+                cfg->glif_path, gw.frames, cols, rows, cfg->fps);
+    }
     ppm_pipe_free(&pp);
     frame_diff_free(&fd);
     free(lm.data);
