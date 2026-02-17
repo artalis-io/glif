@@ -2,7 +2,9 @@
 #include <string.h>
 
 #define TOOLBAR_H 48
-#define MOBILE_BREAKPOINT 600
+#define TOOLBAR_H_WRAP 80
+#define MOBILE_BREAKPOINT 480
+#define WRAP_BREAKPOINT 768
 #define CONTROLS_H 120
 
 /* Forward-declared element IDs */
@@ -23,8 +25,10 @@ Clay_Dimensions ui_measure_text(Clay_StringSlice text,
 void ui_layout_build(UiLayout *layout, int canvas_w, int canvas_h) {
     memset(layout, 0, sizeof(*layout));
     layout->is_mobile = canvas_w < MOBILE_BREAKPOINT;
+    layout->toolbar_wrap = !layout->is_mobile && canvas_w < WRAP_BREAKPOINT;
 
     if (!layout->is_mobile) {
+        int tb_h = layout->toolbar_wrap ? TOOLBAR_H_WRAP : TOOLBAR_H;
         /* Desktop: toolbar on top, viewport fills remaining space */
         CLAY(CLAY_ID("Root"), {
             .layout = {
@@ -41,7 +45,7 @@ void ui_layout_build(UiLayout *layout, int canvas_w, int canvas_h) {
                 .layout = {
                     .sizing = {
                         .width = CLAY_SIZING_GROW(0),
-                        .height = CLAY_SIZING_FIXED(TOOLBAR_H)
+                        .height = CLAY_SIZING_FIXED((float)tb_h)
                     },
                     .layoutDirection = CLAY_LEFT_TO_RIGHT,
                     .childGap = 12,

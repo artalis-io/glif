@@ -13,13 +13,13 @@ DEBUG_CFLAGS = -std=c11 -Wall -Wextra -Wpedantic -Wshadow -Wformat=2 \
 DEBUG_LDFLAGS = -lm -fsanitize=address,undefined
 
 SRC = src/main.c src/image.c src/sampling.c src/grid.c src/font.c \
-      src/contrast.c src/match.c src/output.c
+      src/contrast.c src/match.c src/output.c src/temporal.c
 OBJ = $(SRC:.c=.o)
 BIN = glif
 
 # Library objects (everything except main.o)
 LIB_OBJ = src/image.o src/sampling.o src/grid.o src/font.o \
-           src/contrast.o src/match.o src/output.o
+           src/contrast.o src/match.o src/output.o src/temporal.o
 
 # Linux-only: v4l2 output
 UNAME := $(shell uname)
@@ -30,7 +30,7 @@ endif
 
 TESTS = tests/test_vec6 tests/test_sampling tests/test_image \
         tests/test_grid tests/test_contrast tests/test_match \
-        tests/test_font tests/test_output
+        tests/test_font tests/test_output tests/test_temporal
 
 all: $(BIN)
 
@@ -71,6 +71,9 @@ tests/test_font: tests/test_font.c src/font.o src/sampling.o src/image.o
 tests/test_output: tests/test_output.c src/output.o src/font.o src/image.o src/sampling.o src/grid.o src/contrast.o src/match.o
 	$(CC) $(TCFLAGS) -o $@ tests/test_output.c src/output.o src/font.o src/image.o src/sampling.o src/grid.o src/contrast.o src/match.o $(LDFLAGS)
 
+tests/test_temporal: tests/test_temporal.c src/temporal.o src/image.o src/sampling.o src/grid.o src/contrast.o src/match.o src/font.o
+	$(CC) $(TCFLAGS) -o $@ tests/test_temporal.c src/temporal.o src/image.o src/sampling.o src/grid.o src/contrast.o src/match.o src/font.o $(LDFLAGS)
+
 test: $(LIB_OBJ) $(TESTS)
 	@echo "=== Running tests ==="
 	@fail=0; \
@@ -89,7 +92,7 @@ debug: clean
 
 # Core library (shared between native + WASM)
 CORE_SRC = src/image.c src/sampling.c src/grid.c src/font.c \
-           src/contrast.c src/match.c
+           src/contrast.c src/match.c src/temporal.c
 
 # Legacy WASM build (old JS-based UI)
 WASM_LEGACY_SRC = $(CORE_SRC) src/platform/wasm/wasm_api.c

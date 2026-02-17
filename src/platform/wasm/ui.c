@@ -17,6 +17,7 @@
 #include "font.h"
 #include "contrast.h"
 #include "match.h"
+#include "temporal.h"
 
 #define NK_INCLUDE_FIXED_TYPES
 #define NK_INCLUDE_DEFAULT_ALLOCATOR
@@ -130,10 +131,18 @@ static struct {
     /* Resolution mode */
     int hi_res; /* 0 = ~120x40, 1 = ~240x80 (4x chars) */
 
+    /* Temporal smoothing */
+    int stabilize;
+    NormSmoother norm_sm;
+    ShapeSmoother shape_sm;
+    ContrastSmoother contrast_sm;
+    MatchSmoother match_sm;
+
     /* Previous parameter values for change detection */
     float prev_dir_crunch, prev_global_crunch;
     int prev_adaptive_on;
     int prev_hi_res;
+    int prev_stabilize;
 } app;
 
 /* Compute cell dimensions from image size and resolution mode.
@@ -400,8 +409,10 @@ static void process_frame(const uint8_t *pixels, int w, int h, int channels) {
         return;
     }
 
-    /* Normalization is always part of the pipeline (matches CLI) */
-    lightness_map_normalize(&lm);
+    if (app.stabilize)
+        norm_smoother_apply(&app.norm_sm, &lm, 0.4f);
+    else
+        lightness_map_normalize(&lm);
 
     /* Temporarily disable adaptive per-cell crunch when toggle is off */
     float saved_floor = app.adaptive.floor;
@@ -409,13 +420,25 @@ static void process_frame(const uint8_t *pixels, int w, int h, int channels) {
         app.adaptive.floor = -1.0f;
 
     grid_compute_vectors_fast(&app.grid, &lm, &app.pm);
+
+    if (app.stabilize)
+        shape_smoother_apply(&app.shape_sm, &app.grid, 0.4f);
+
     grid_compute_colors(&app.grid, &img);
     contrast_analyze_frame(&app.adaptive, &app.grid);
+
+    if (app.stabilize)
+        contrast_smoother_apply(&app.contrast_sm, &app.adaptive, 0.3f);
+
     contrast_directional(&app.grid, &app.sc, app.dir_crunch, &app.adaptive);
     contrast_global(&app.grid, app.global_crunch, &app.adaptive);
 
     app.adaptive.floor = saved_floor;
-    match_grid(&app.grid, &app.db);
+
+    if (app.stabilize)
+        match_smoother_apply(&app.match_sm, &app.grid, &app.db, 0.15f);
+    else
+        match_grid(&app.grid, &app.db);
 
     app.has_result = 1;
     lightness_map_free(&lm);
@@ -434,6 +457,7 @@ void app_init(float dpr, int canvas_w, int canvas_h) {
     app.dir_crunch = 1.25f;
     app.global_crunch = 1.5f;
     app.adaptive_on = 1;
+    app.stabilize = 1;
     app.adaptive.floor = 5.0f / 255.0f;
     app.adaptive.ceil = 80.0f / 255.0f;
 
@@ -490,6 +514,7 @@ void app_init(float dpr, int canvas_w, int canvas_h) {
     app.prev_global_crunch = app.global_crunch;
     app.prev_adaptive_on = app.adaptive_on;
     app.prev_hi_res = app.hi_res;
+    app.prev_stabilize = app.stabilize;
 
     app.initialized = 1;
 }
@@ -564,6 +589,13 @@ void app_frame(void) {
         /* Force Nuklear window to match Clay-computed bounds every frame.
            nk_begin only uses bounds for initial creation; this overrides stored position. */
         nk_window_set_bounds(&app.nk, "Toolbar", tb);
+
+        /* Add inner padding and item spacing */
+        nk_style_push_vec2(&app.nk, &app.nk.style.window.padding,
+                           nk_vec2(12, 8));
+        nk_style_push_vec2(&app.nk, &app.nk.style.window.spacing,
+                           nk_vec2(8, 6));
+
         if (nk_begin(&app.nk, "Toolbar", tb, NK_WINDOW_NO_SCROLLBAR)) {
             if (layout.is_mobile) {
                 /* Mobile: stacked rows */
@@ -571,20 +603,39 @@ void app_frame(void) {
                 nk_property_float(&app.nk, "Edge", 0.0f, &app.dir_crunch, 10.0f, 0.05f, 0.05f);
                 nk_property_float(&app.nk, "Contrast", 0.0f, &app.global_crunch, 10.0f, 0.05f, 0.05f);
 
-                nk_layout_row_dynamic(&app.nk, 28, 3);
+                nk_layout_row_dynamic(&app.nk, 28, 4);
                 nk_checkbox_label(&app.nk, "Adaptive", &app.adaptive_on);
+                nk_checkbox_label(&app.nk, "Stable", &app.stabilize);
                 if (nk_button_label(&app.nk, app.hi_res ? "Hi Res" : "Lo Res"))
                     app.hi_res = !app.hi_res;
 #ifdef __EMSCRIPTEN__
                 if (nk_button_label(&app.nk, "Camera"))
                     EM_ASM({ if (window.glifToggleCamera) window.glifToggleCamera(); });
 #endif
+            } else if (layout.toolbar_wrap) {
+                /* Medium width: 2 rows */
+                nk_layout_row_dynamic(&app.nk, 24, 2);
+                nk_property_float(&app.nk, "Edge", 0.0f, &app.dir_crunch, 10.0f, 0.05f, 0.05f);
+                nk_property_float(&app.nk, "Contrast", 0.0f, &app.global_crunch, 10.0f, 0.05f, 0.05f);
+
+                nk_layout_row_dynamic(&app.nk, 24, 4);
+                nk_checkbox_label(&app.nk, "Adaptive", &app.adaptive_on);
+                nk_checkbox_label(&app.nk, "Stable", &app.stabilize);
+                if (nk_button_label(&app.nk, app.hi_res ? "Hi Res" : "Lo Res"))
+                    app.hi_res = !app.hi_res;
+#ifdef __EMSCRIPTEN__
+                if (nk_button_label(&app.nk, "Webcam"))
+                    EM_ASM({ if (window.glifToggleCamera) window.glifToggleCamera(); });
+#else
+                nk_button_label(&app.nk, "Webcam");
+#endif
             } else {
-                /* Desktop: single row */
-                nk_layout_row_dynamic(&app.nk, 28, 5);
+                /* Wide desktop: single row */
+                nk_layout_row_dynamic(&app.nk, 28, 6);
                 nk_property_float(&app.nk, "Edge", 0.0f, &app.dir_crunch, 10.0f, 0.05f, 0.05f);
                 nk_property_float(&app.nk, "Contrast", 0.0f, &app.global_crunch, 10.0f, 0.05f, 0.05f);
                 nk_checkbox_label(&app.nk, "Adaptive", &app.adaptive_on);
+                nk_checkbox_label(&app.nk, "Stable", &app.stabilize);
                 if (nk_button_label(&app.nk, app.hi_res ? "Hi Res" : "Lo Res"))
                     app.hi_res = !app.hi_res;
 
@@ -597,6 +648,9 @@ void app_frame(void) {
             }
         }
         nk_end(&app.nk);
+
+        nk_style_pop_vec2(&app.nk);
+        nk_style_pop_vec2(&app.nk);
     }
 
     /* Detect parameter changes and rebuild/reprocess as needed */
@@ -609,9 +663,25 @@ void app_frame(void) {
                 sampling_precompute_free(&app.pm);
                 app.pm_stride = 0;
             }
+            /* Reset all smoothers — grid dimensions changed */
+            norm_smoother_init(&app.norm_sm);
+            shape_smoother_free(&app.shape_sm);
+            contrast_smoother_init(&app.contrast_sm);
+            match_smoother_free(&app.match_sm);
             rebuild_pipeline();
             app.pending_dirty = 1;
         }
+    }
+    if (app.stabilize != app.prev_stabilize) {
+        app.prev_stabilize = app.stabilize;
+        if (!app.stabilize) {
+            /* Reset smoothers so they start fresh when re-enabled */
+            norm_smoother_init(&app.norm_sm);
+            shape_smoother_free(&app.shape_sm);
+            contrast_smoother_init(&app.contrast_sm);
+            match_smoother_free(&app.match_sm);
+        }
+        if (app.pending_pixels) app.pending_dirty = 1;
     }
     if (app.dir_crunch != app.prev_dir_crunch ||
         app.global_crunch != app.prev_global_crunch ||

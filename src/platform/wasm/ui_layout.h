@@ -7,6 +7,7 @@ typedef struct {
     Clay_BoundingBox viewport;   /* ASCII art viewport bounds */
     Clay_BoundingBox toolbar;    /* Toolbar bounds */
     int is_mobile;               /* True if width < 600 */
+    int toolbar_wrap;            /* True if toolbar needs 2 rows (600-767) */
 } UiLayout;
 
 /* Must be called after Clay_BeginLayout() and before Clay_EndLayout().
