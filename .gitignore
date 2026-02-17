@@ -1,29 +1,18 @@
 # Build artifacts
 *.o
 /glif
-/gen_test_images
-tests/test_vec6
-tests/test_sampling
-tests/test_image
-tests/test_grid
-tests/test_contrast
-tests/test_match
-tests/test_font
-tests/test_output
+tests/test_*
+!tests/test_*.c
 
 # Debug symbols
 *.dSYM/
 
-# Benchmark tool
+# Tools
 tools/bench
-
-# Test image generator
 tools/gen_test_images
 
-# Test images
+# Test data
 images/
-
-# Videos (download your own test clips)
 videos/
 
 # macOS

@@ -94,19 +94,6 @@ debug: clean
 CORE_SRC = src/image.c src/sampling.c src/grid.c src/font.c \
            src/contrast.c src/match.c src/temporal.c
 
-# Legacy WASM build (old JS-based UI)
-WASM_LEGACY_SRC = $(CORE_SRC) src/platform/wasm/wasm_api.c
-
-wasm-legacy: $(WASM_LEGACY_SRC)
-	@mkdir -p web
-	emcc -std=c11 -O2 -msimd128 -Ivendor -Isrc \
-	  -s WASM=1 -s ALLOW_MEMORY_GROWTH=1 \
-	  -s MODULARIZE=1 -s EXPORT_NAME='createGlifModule' \
-	  -s "EXPORTED_FUNCTIONS=['_glif_init','_glif_process_frame','_glif_free','_malloc','_free']" \
-	  -s "EXPORTED_RUNTIME_METHODS=['ccall','cwrap','HEAPU8','HEAP8']" \
-	  -s NO_FILESYSTEM=1 --no-entry \
-	  -o web/glif.js $(WASM_LEGACY_SRC) -lm
-
 # WASM build via Emscripten (Nuklear + Clay UI)
 WASM_UI_SRC = $(CORE_SRC) \
               src/platform/wasm/ui.c \
@@ -135,4 +122,4 @@ clean:
 	rm -f $(OBJ) $(BIN) $(TESTS)
 	rm -f src/platform/linux/*.o src/platform/wasm/*.o
 
-.PHONY: all clean test debug wasm wasm-legacy
+.PHONY: all clean test debug wasm

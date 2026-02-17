@@ -86,25 +86,9 @@ Both `image.c` and `font.c` expose buffer-wrapping functions for WASM use (no fi
 - `image_load_buffer(img, data, w, h, channels)` — wraps an external pixel buffer (RGB or RGBA). `Image.owns_pixels` controls whether `image_free()` calls `stbi_image_free()`.
 - `char_db_create_from_memory(db, font_data, font_len, ...)` — wraps font bytes. `CharDatabase.owns_font_data` controls freeing.
 
-### WASM API (`src/wasm_api.c`)
+### WASM UI (`src/platform/wasm/ui.c`)
 
-Exports via `EMSCRIPTEN_KEEPALIVE`:
-
-```c
-GlifContext *glif_init(const uint8_t *font_data, int font_len,
-                       int cell_w, int cell_h,
-                       float dir_crunch, float global_crunch);
-
-int glif_process_frame(GlifContext *ctx, const uint8_t *pixels,
-                       int w, int h, int channels,
-                       char *out_chars, uint8_t *out_r,
-                       uint8_t *out_g, uint8_t *out_b);
-    // Returns: rows | (cols << 16)
-
-void glif_free(GlifContext *ctx);
-```
-
-`GlifContext` holds `CharDatabase`, `SamplingConfig`, `PrecomputedMasks` (lazy-rebuilt when image stride changes), and crunch parameters.
+Full-featured web UI built with Nuklear (widgets) + Clay (layout), rendered via WebGL.
 
 ### Build
 
@@ -112,13 +96,12 @@ void glif_free(GlifContext *ctx);
 make wasm    # produces web/glif.js + web/glif.wasm
 ```
 
-Key flags: `-msimd128`, `MODULARIZE` (factory function `createGlifModule`), `NO_FILESYSTEM`, `--no-entry`.
+Key flags: `-msimd128`, `FULL_ES2`, `MODULARIZE` (factory function `createGlifModule`), `NO_FILESYSTEM`, `--no-entry`.
 
 ### Web Frontend (`web/`)
 
-- **`web/glif-wrapper.js`** — `GlifRenderer` class managing WASM heap buffers, auto-growing input/output allocations
-- **`web/index.html`** — drag-and-drop UI with Canvas 2D rendering (`fillText` per cell), webcam support, video/GIF playback via `requestAnimationFrame`, FPS counter
-- RGBA pixels passed directly with `channels=4` — no JS-side conversion needed
+- **`web/glif-app.js`** — JS bridge forwarding mouse/touch/keyboard events, file picking, webcam, DPR-aware canvas sizing
+- **`web/index.html`** — minimal entry point loading the WASM module
 
 ```bash
 # Serve locally
