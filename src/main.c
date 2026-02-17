@@ -345,6 +345,20 @@ static int run_video(Config *cfg) {
     int cols = grid.cols;
     int rows = grid.rows;
 
+    /* Init diff renderer for color mode */
+    FrameDiff fd = {0};
+    if (cfg->color) {
+        if (frame_diff_init(&fd, rows, cols) != 0) {
+            fprintf(stderr, "error: failed to allocate diff buffer\n");
+            free(lm.data);
+            grid_free(&grid);
+            free(frame_buf);
+            char_db_free(&db);
+            sampling_precompute_free(&pm);
+            return 1;
+        }
+    }
+
     /* Hide cursor, clear screen */
     fprintf(stderr, "Video: %dx%d @ %.0f fps, grid %dx%d (%d cells)\n",
             w, h, cfg->fps, cols, rows, cols * rows);
@@ -370,7 +384,7 @@ static int run_video(Config *cfg) {
 
         /* Render */
         if (cfg->color) {
-            output_ansi_inplace(&grid, cfg->dark_mode);
+            frame_diff_render(&fd, &grid, cfg->dark_mode);
         } else {
             printf("\033[H");
             output_plain(&grid);
@@ -404,6 +418,7 @@ static int run_video(Config *cfg) {
     }
 
     /* Cleanup */
+    frame_diff_free(&fd);
     free(lm.data);
     lm.data = NULL;
     grid_free(&grid);

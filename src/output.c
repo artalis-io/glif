@@ -24,22 +24,30 @@ void output_ansi(const Grid *grid) {
     printf("\033[0m");
 }
 
-void output_ansi_inplace(const Grid *grid, int dark_mode) {
-    /* Build entire frame in a buffer, then write once to minimize flicker */
-    /* Worst case per cell: \033[48;2;RRR;GGG;BBBm\033[38;2;255;255;255mC = ~48 bytes */
-    /* Per row: add \033[0m\n = 5 bytes. Plus header \033[H = 3 bytes */
-    size_t bufsize = (size_t)(grid->rows * grid->cols) * 48
-                   + (size_t)grid->rows * 6 + 16;
-    char *buf = malloc(bufsize);
-    if (!buf) return;
+int frame_diff_init(FrameDiff *fd, int rows, int cols) {
+    int cells = rows * cols;
+    /* Worst case: every cell changed, ~48 bytes per cell + cursor moves */
+    fd->bufsize = (size_t)cells * 60 + (size_t)rows * 6 + 16;
+    fd->buf = malloc(fd->bufsize);
+    if (!fd->buf) return -1;
+    fd->prev = calloc((size_t)cells, 4);  /* zeroed — first frame renders all */
+    if (!fd->prev) { free(fd->buf); fd->buf = NULL; return -1; }
+    fd->cells = cells;
+    fd->cols = cols;
+    return 0;
+}
 
-    char *p = buf;
-    /* Cursor home */
+/* Full redraw — cursor home, emit every cell sequentially. No cursor moves needed. */
+static void frame_full_redraw(FrameDiff *fd, const Grid *grid, int dark_mode) {
+    char *p = fd->buf;
+    int rows = grid->rows;
+    int cols = grid->cols;
+
     *p++ = '\033'; *p++ = '['; *p++ = 'H';
 
-    for (int r = 0; r < grid->rows; r++) {
-        for (int c = 0; c < grid->cols; c++) {
-            const GridCell *cell = &grid->cells[r * grid->cols + c];
+    for (int r = 0; r < rows; r++) {
+        for (int c = 0; c < cols; c++) {
+            const GridCell *cell = &grid->cells[r * cols + c];
             if (dark_mode) {
                 p += sprintf(p, "\033[38;2;%d;%d;%dm%c",
                              cell->r, cell->g, cell->b, cell->ch);
@@ -52,9 +60,93 @@ void output_ansi_inplace(const Grid *grid, int dark_mode) {
     }
     *p++ = '\033'; *p++ = '['; *p++ = '0'; *p++ = 'm';
 
-    fwrite(buf, 1, (size_t)(p - buf), stdout);
+    fwrite(fd->buf, 1, (size_t)(p - fd->buf), stdout);
     fflush(stdout);
-    free(buf);
+}
+
+void frame_diff_render(FrameDiff *fd, const Grid *grid, int dark_mode) {
+    int rows = grid->rows;
+    int cols = grid->cols;
+    int total = rows * cols;
+
+    /* Count changed cells to decide: diff vs full redraw */
+    int changed = 0;
+    for (int i = 0; i < total; i++) {
+        const GridCell *cell = &grid->cells[i];
+        uint8_t *prev = &fd->prev[i * 4];
+        if (prev[0] != (uint8_t)cell->ch ||
+            prev[1] != cell->r ||
+            prev[2] != cell->g ||
+            prev[3] != cell->b) {
+            changed++;
+        }
+    }
+
+    /* If >50% changed, full redraw is cheaper (no cursor positioning overhead) */
+    if (changed * 2 > total) {
+        /* Update prev buffer */
+        for (int i = 0; i < total; i++) {
+            const GridCell *cell = &grid->cells[i];
+            uint8_t *prev = &fd->prev[i * 4];
+            prev[0] = (uint8_t)cell->ch;
+            prev[1] = cell->r;
+            prev[2] = cell->g;
+            prev[3] = cell->b;
+        }
+        frame_full_redraw(fd, grid, dark_mode);
+        return;
+    }
+
+    /* Diff path — only emit changed cells */
+    char *p = fd->buf;
+    int cursor_r = -1, cursor_c = -1;
+
+    for (int r = 0; r < rows; r++) {
+        for (int c = 0; c < cols; c++) {
+            int idx = r * cols + c;
+            const GridCell *cell = &grid->cells[idx];
+            uint8_t *prev = &fd->prev[idx * 4];
+
+            if (prev[0] == (uint8_t)cell->ch &&
+                prev[1] == cell->r &&
+                prev[2] == cell->g &&
+                prev[3] == cell->b) {
+                continue;
+            }
+
+            prev[0] = (uint8_t)cell->ch;
+            prev[1] = cell->r;
+            prev[2] = cell->g;
+            prev[3] = cell->b;
+
+            if (cursor_r != r || cursor_c != c) {
+                p += sprintf(p, "\033[%d;%dH", r + 1, c + 1);
+            }
+
+            if (dark_mode) {
+                p += sprintf(p, "\033[38;2;%d;%d;%dm%c",
+                             cell->r, cell->g, cell->b, cell->ch);
+            } else {
+                p += sprintf(p, "\033[48;2;%d;%d;%dm\033[38;2;255;255;255m%c",
+                             cell->r, cell->g, cell->b, cell->ch);
+            }
+            cursor_r = r;
+            cursor_c = c + 1;
+        }
+    }
+
+    if (p > fd->buf) {
+        p += sprintf(p, "\033[0m");
+        fwrite(fd->buf, 1, (size_t)(p - fd->buf), stdout);
+        fflush(stdout);
+    }
+}
+
+void frame_diff_free(FrameDiff *fd) {
+    free(fd->buf);
+    free(fd->prev);
+    fd->buf = NULL;
+    fd->prev = NULL;
 }
 
 int output_ppm(const Grid *grid, const CharDatabase *db,
