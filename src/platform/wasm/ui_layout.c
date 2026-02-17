@@ -135,7 +135,11 @@ void ui_layout_build(UiLayout *layout, int canvas_w, int canvas_h) {
         }
     }
 
-    /* Retrieve computed bounding boxes */
+    /* NOTE: bounding boxes are computed by Clay_EndLayout(), called separately.
+       Call ui_layout_get_bounds() after Clay_EndLayout() to retrieve them. */
+}
+
+void ui_layout_get_bounds(UiLayout *layout) {
     Clay_ElementData vp = Clay_GetElementData(CLAY_ID("Viewport"));
     if (vp.found) layout->viewport = vp.boundingBox;
 

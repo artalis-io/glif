@@ -13,6 +13,9 @@ typedef struct {
    Declares the Clay element tree for the app layout. */
 void ui_layout_build(UiLayout *layout, int canvas_w, int canvas_h);
 
+/* Must be called AFTER Clay_EndLayout() to retrieve computed bounding boxes. */
+void ui_layout_get_bounds(UiLayout *layout);
+
 /* Clay text measurement callback — uses Nuklear font */
 Clay_Dimensions ui_measure_text(Clay_StringSlice text,
                                 Clay_TextElementConfig *config,

@@ -114,11 +114,11 @@ void nk_webgl_render(NkWebGL *nk, struct nk_context *ctx, int width, int height)
 
     struct nk_convert_config cfg = {0};
     cfg.global_alpha = 1.0f;
-    cfg.shape_AA = NK_ANTI_ALIASING_ON;
-    cfg.line_AA = NK_ANTI_ALIASING_ON;
-    cfg.circle_segment_count = 22;
-    cfg.curve_segment_count = 22;
-    cfg.arc_segment_count = 22;
+    cfg.shape_AA = NK_ANTI_ALIASING_OFF;
+    cfg.line_AA = NK_ANTI_ALIASING_OFF;
+    cfg.circle_segment_count = 8;
+    cfg.curve_segment_count = 8;
+    cfg.arc_segment_count = 8;
     cfg.tex_null = nk->tex_null;
     cfg.vertex_layout = vertex_layout;
     cfg.vertex_size = sizeof(struct nk_vertex);

@@ -123,6 +123,11 @@ static struct {
     uint8_t *pending_pixels;
     int pending_w, pending_h, pending_channels;
     int pending_dirty;
+
+    /* Previous parameter values for change detection */
+    int prev_cell_w, prev_cell_h;
+    float prev_dir_crunch, prev_global_crunch;
+    int prev_adaptive_on;
 } app;
 
 /* ── Viewport shader helpers ── */
@@ -360,13 +365,14 @@ static void process_frame(const uint8_t *pixels, int w, int h, int channels) {
         return;
     }
 
-    /* Temporarily set adaptive floor based on toggle */
+    /* Normalization is always part of the pipeline (matches CLI) */
+    lightness_map_normalize(&lm);
+
+    /* Temporarily disable adaptive per-cell crunch when toggle is off */
     float saved_floor = app.adaptive.floor;
     if (!app.adaptive_on)
         app.adaptive.floor = -1.0f;
 
-    if (app.adaptive.floor >= 0.0f)
-        lightness_map_normalize(&lm);
     grid_compute_vectors_fast(&app.grid, &lm, &app.pm);
     grid_compute_colors(&app.grid, &img);
     contrast_analyze_frame(&app.adaptive, &app.grid);
@@ -444,6 +450,13 @@ void app_init(float dpr, int canvas_w, int canvas_h) {
     if (app.font_loaded)
         rebuild_pipeline();
 
+    /* Init change-detection state */
+    app.prev_cell_w = app.cell_w;
+    app.prev_cell_h = app.cell_h;
+    app.prev_dir_crunch = app.dir_crunch;
+    app.prev_global_crunch = app.global_crunch;
+    app.prev_adaptive_on = app.adaptive_on;
+
     app.initialized = 1;
 }
 
@@ -466,13 +479,6 @@ void app_frame(void) {
     int logical_h = (int)((float)app.canvas_h / app.dpr);
     if (logical_w <= 0 || logical_h <= 0) return;
 
-    /* Process pending frame data */
-    if (app.pending_dirty && app.pending_pixels) {
-        process_frame(app.pending_pixels, app.pending_w,
-                      app.pending_h, app.pending_channels);
-        app.pending_dirty = 0;
-    }
-
     /* Nuklear input */
     nk_input_begin(&app.nk);
     nk_input_motion(&app.nk, app.mouse_x, app.mouse_y);
@@ -488,6 +494,8 @@ void app_frame(void) {
     UiLayout layout;
     ui_layout_build(&layout, logical_w, logical_h);
     Clay_RenderCommandArray commands = Clay_EndLayout();
+    /* Get bounds AFTER EndLayout computes positions */
+    ui_layout_get_bounds(&layout);
 
     /* Clear framebuffer */
     glViewport(0, 0, app.canvas_w, app.canvas_h);
@@ -519,10 +527,12 @@ void app_frame(void) {
     if (layout.toolbar.width > 0 && layout.toolbar.height > 0) {
         struct nk_rect tb = nk_rect(layout.toolbar.x, layout.toolbar.y,
                                     layout.toolbar.width, layout.toolbar.height);
-        if (nk_begin(&app.nk, "Toolbar", tb,
-                     NK_WINDOW_NO_SCROLLBAR | NK_WINDOW_NO_INPUT)) {
+        /* Force Nuklear window to match Clay-computed bounds every frame.
+           nk_begin only uses bounds for initial creation; this overrides stored position. */
+        nk_window_set_bounds(&app.nk, "Toolbar", tb);
+        if (nk_begin(&app.nk, "Toolbar", tb, NK_WINDOW_NO_SCROLLBAR)) {
             if (layout.is_mobile) {
-                /* Mobile: vertical layout */
+                /* Mobile: stacked rows */
                 nk_layout_row_dynamic(&app.nk, 24, 2);
                 nk_property_int(&app.nk, "Cell W", 2, &app.cell_w, 100, 1, 0.5f);
                 nk_property_int(&app.nk, "Cell H", 2, &app.cell_h, 100, 1, 0.5f);
@@ -538,16 +548,8 @@ void app_frame(void) {
                     EM_ASM({ if (window.glifToggleCamera) window.glifToggleCamera(); });
 #endif
             } else {
-                /* Desktop: horizontal layout */
-                nk_layout_row_template_begin(&app.nk, 28);
-                nk_layout_row_template_push_static(&app.nk, 100);
-                nk_layout_row_template_push_static(&app.nk, 100);
-                nk_layout_row_template_push_static(&app.nk, 120);
-                nk_layout_row_template_push_static(&app.nk, 120);
-                nk_layout_row_template_push_static(&app.nk, 80);
-                nk_layout_row_template_push_static(&app.nk, 70);
-                nk_layout_row_template_end(&app.nk);
-
+                /* Desktop: single row, auto-sized to toolbar width */
+                nk_layout_row_dynamic(&app.nk, 28, 6);
                 nk_property_int(&app.nk, "Cell W", 2, &app.cell_w, 100, 1, 0.5f);
                 nk_property_int(&app.nk, "Cell H", 2, &app.cell_h, 100, 1, 0.5f);
                 nk_property_float(&app.nk, "Dir", 0.0f, &app.dir_crunch, 10.0f, 0.05f, 0.05f);
@@ -563,6 +565,35 @@ void app_frame(void) {
             }
         }
         nk_end(&app.nk);
+    }
+
+    /* Detect parameter changes and rebuild/reprocess as needed */
+    if (app.cell_w != app.prev_cell_w || app.cell_h != app.prev_cell_h) {
+        /* Cell dimensions changed — rebuild char DB + font atlas + invalidate masks */
+        if (app.pm_stride != 0) {
+            sampling_precompute_free(&app.pm);
+            app.pm_stride = 0;
+        }
+        rebuild_pipeline();
+        app.prev_cell_w = app.cell_w;
+        app.prev_cell_h = app.cell_h;
+        if (app.pending_pixels) app.pending_dirty = 1;
+    }
+    if (app.dir_crunch != app.prev_dir_crunch ||
+        app.global_crunch != app.prev_global_crunch ||
+        app.adaptive_on != app.prev_adaptive_on) {
+        /* Contrast params changed — reprocess current image */
+        app.prev_dir_crunch = app.dir_crunch;
+        app.prev_global_crunch = app.global_crunch;
+        app.prev_adaptive_on = app.adaptive_on;
+        if (app.pending_pixels) app.pending_dirty = 1;
+    }
+
+    /* Process pending frame data */
+    if (app.pending_dirty && app.pending_pixels) {
+        process_frame(app.pending_pixels, app.pending_w,
+                      app.pending_h, app.pending_channels);
+        app.pending_dirty = 0;
     }
 
     /* Render ASCII art viewport */
