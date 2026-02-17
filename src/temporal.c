@@ -87,6 +87,15 @@ void shape_smoother_apply(ShapeSmoother *ss, Grid *grid, float alpha) {
         free(ss->prev_externals);
         ss->prev_shapes = malloc((size_t)n * sizeof(Vec6));
         ss->prev_externals = malloc((size_t)n * sizeof(Vec10));
+        if (!ss->prev_shapes || !ss->prev_externals) {
+            free(ss->prev_shapes);
+            free(ss->prev_externals);
+            ss->prev_shapes = NULL;
+            ss->prev_externals = NULL;
+            ss->count = 0;
+            ss->ready = 0;
+            return;
+        }
         ss->count = n;
         ss->ready = 0;
     }
@@ -172,6 +181,12 @@ void match_smoother_apply(MatchSmoother *ms, Grid *grid,
     if (n != ms->count) {
         free(ms->prev_chars);
         ms->prev_chars = calloc((size_t)n, 1);
+        if (!ms->prev_chars) {
+            ms->count = 0;
+            ms->ready = 0;
+            match_grid(grid, db);
+            return;
+        }
         ms->count = n;
         ms->ready = 0;
     }

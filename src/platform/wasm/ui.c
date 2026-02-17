@@ -220,7 +220,7 @@ static void vp_build_font_atlas(void) {
     int atlas_h = ATLAS_GRID_Y * phys_h;
 
     /* RGBA atlas for WebGL */
-    uint8_t *atlas_rgba = calloc((size_t)(atlas_w * atlas_h * 4), 1);
+    uint8_t *atlas_rgba = calloc((size_t)atlas_w * (size_t)atlas_h, 4);
     if (!atlas_rgba) return;
 
     float scale = stbtt_ScaleForPixelHeight(&font, (float)phys_h);
@@ -495,6 +495,7 @@ void app_init(float dpr, int canvas_w, int canvas_h) {
     /* Init Clay */
     uint32_t clay_mem_size = Clay_MinMemorySize();
     app.clay_mem = malloc(clay_mem_size);
+    if (!app.clay_mem) return;
     Clay_Arena arena = Clay_CreateArenaWithCapacityAndMemory(clay_mem_size, app.clay_mem);
     Clay_ErrorHandler err = { 0 };
     app.clay_ctx = Clay_Initialize(arena,

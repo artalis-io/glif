@@ -40,6 +40,7 @@ int frame_diff_init(FrameDiff *fd, int rows, int cols) {
 /* Full redraw — cursor home, emit every cell sequentially. No cursor moves needed. */
 static void frame_full_redraw(FrameDiff *fd, const Grid *grid, int dark_mode) {
     char *p = fd->buf;
+    char *end = fd->buf + fd->bufsize;
     int rows = grid->rows;
     int cols = grid->cols;
 
@@ -48,12 +49,13 @@ static void frame_full_redraw(FrameDiff *fd, const Grid *grid, int dark_mode) {
     for (int r = 0; r < rows; r++) {
         for (int c = 0; c < cols; c++) {
             const GridCell *cell = &grid->cells[r * cols + c];
+            size_t rem = (size_t)(end - p);
             if (dark_mode) {
-                p += sprintf(p, "\033[38;2;%d;%d;%dm%c",
-                             cell->r, cell->g, cell->b, cell->ch);
+                p += snprintf(p, rem, "\033[38;2;%d;%d;%dm%c",
+                              cell->r, cell->g, cell->b, cell->ch);
             } else {
-                p += sprintf(p, "\033[48;2;%d;%d;%dm\033[38;2;255;255;255m%c",
-                             cell->r, cell->g, cell->b, cell->ch);
+                p += snprintf(p, rem, "\033[48;2;%d;%d;%dm\033[38;2;255;255;255m%c",
+                              cell->r, cell->g, cell->b, cell->ch);
             }
         }
         *p++ = '\033'; *p++ = '['; *p++ = '0'; *p++ = 'm'; *p++ = '\n';
@@ -108,6 +110,7 @@ void frame_diff_render(FrameDiff *fd, const Grid *grid, int dark_mode) {
 
     /* Diff path — only emit changed cells */
     char *p = fd->buf;
+    char *end = fd->buf + fd->bufsize;
     int cursor_r = -1, cursor_c = -1;
 
     for (int r = 0; r < rows; r++) {
@@ -128,16 +131,18 @@ void frame_diff_render(FrameDiff *fd, const Grid *grid, int dark_mode) {
             prev[2] = cell->g;
             prev[3] = cell->b;
 
+            size_t rem = (size_t)(end - p);
             if (cursor_r != r || cursor_c != c) {
-                p += sprintf(p, "\033[%d;%dH", r + 1, c + 1);
+                p += snprintf(p, rem, "\033[%d;%dH", r + 1, c + 1);
+                rem = (size_t)(end - p);
             }
 
             if (dark_mode) {
-                p += sprintf(p, "\033[38;2;%d;%d;%dm%c",
-                             cell->r, cell->g, cell->b, cell->ch);
+                p += snprintf(p, rem, "\033[38;2;%d;%d;%dm%c",
+                              cell->r, cell->g, cell->b, cell->ch);
             } else {
-                p += sprintf(p, "\033[48;2;%d;%d;%dm\033[38;2;255;255;255m%c",
-                             cell->r, cell->g, cell->b, cell->ch);
+                p += snprintf(p, rem, "\033[48;2;%d;%d;%dm\033[38;2;255;255;255m%c",
+                              cell->r, cell->g, cell->b, cell->ch);
             }
             cursor_r = r;
             cursor_c = c + 1;
@@ -145,7 +150,8 @@ void frame_diff_render(FrameDiff *fd, const Grid *grid, int dark_mode) {
     }
 
     if (p > fd->buf) {
-        p += sprintf(p, "\033[0m");
+        size_t rem = (size_t)(end - p);
+        p += snprintf(p, rem, "\033[0m");
         fwrite(fd->buf, 1, (size_t)(p - fd->buf), stdout);
         fflush(stdout);
     }
@@ -262,7 +268,7 @@ int ppm_pipe_init(PpmPipe *pp, const Grid *grid, const CharDatabase *db,
     pp->img_w = (size_t)grid->cols * (size_t)pp->rw;
     pp->img_h = (size_t)grid->rows * (size_t)pp->rh;
 
-    pp->pixels = malloc(pp->img_w * pp->img_h * 3);
+    pp->pixels = calloc(pp->img_w * pp->img_h, 3);
     if (!pp->pixels) return -1;
 
     pp->render_bmps = NULL;
@@ -318,14 +324,16 @@ void ppm_pipe_render(PpmPipe *pp, const Grid *grid, const CharDatabase *db) {
 
 void ppm_pipe_frame(PpmPipe *pp, const Grid *grid, const CharDatabase *db) {
     ppm_pipe_render(pp, grid, db);
+    size_t nbytes = pp->img_w * pp->img_h * 3;
     fprintf(stdout, "P6\n%zu %zu\n255\n", pp->img_w, pp->img_h);
-    fwrite(pp->pixels, 1, pp->img_w * pp->img_h * 3, stdout);
+    if (fwrite(pp->pixels, 1, nbytes, stdout) != nbytes) return;
     fflush(stdout);
 }
 
 void raw_pipe_frame(PpmPipe *pp, const Grid *grid, const CharDatabase *db) {
     ppm_pipe_render(pp, grid, db);
-    fwrite(pp->pixels, 1, pp->img_w * pp->img_h * 3, stdout);
+    size_t nbytes = pp->img_w * pp->img_h * 3;
+    if (fwrite(pp->pixels, 1, nbytes, stdout) != nbytes) return;
     fflush(stdout);
 }
 
@@ -341,20 +349,22 @@ void ppm_pipe_free(PpmPipe *pp) {
 
 /* ---- .glif binary format ---- */
 
-static void write_u8(FILE *f, uint8_t v)  { fwrite(&v, 1, 1, f); }
-static void write_u16(FILE *f, uint16_t v) {
-    uint8_t buf[2] = { (uint8_t)(v & 0xFF), (uint8_t)(v >> 8) };
-    fwrite(buf, 1, 2, f);
+static int write_u8(FILE *f, uint8_t v) {
+    return fwrite(&v, 1, 1, f) == 1 ? 0 : -1;
 }
-static void write_u32(FILE *f, uint32_t v) {
+static int write_u16(FILE *f, uint16_t v) {
+    uint8_t buf[2] = { (uint8_t)(v & 0xFF), (uint8_t)(v >> 8) };
+    return fwrite(buf, 1, 2, f) == 2 ? 0 : -1;
+}
+static int write_u32(FILE *f, uint32_t v) {
     uint8_t buf[4] = { (uint8_t)(v), (uint8_t)(v >> 8),
                         (uint8_t)(v >> 16), (uint8_t)(v >> 24) };
-    fwrite(buf, 1, 4, f);
+    return fwrite(buf, 1, 4, f) == 4 ? 0 : -1;
 }
-static void write_f32(FILE *f, float v) {
+static int write_f32(FILE *f, float v) {
     uint32_t bits;
     memcpy(&bits, &v, 4);
-    write_u32(f, bits);
+    return write_u32(f, bits);
 }
 
 int glif_writer_init(GlifWriter *gw, const char *path,
@@ -371,28 +381,32 @@ int glif_writer_init(GlifWriter *gw, const char *path,
     }
     gw->frames = 0;
     gw->cells = cols * rows;
+    gw->err = 0;
 
     /* Write header (24 bytes) */
-    fwrite(GLIF_MAGIC, 1, 4, gw->file);          /* magic */
-    write_u8(gw->file, GLIF_VERSION);             /* version */
-    write_u8(gw->file, dark_mode ? GLIF_FLAG_DARK : 0); /* flags */
-    write_u16(gw->file, (uint16_t)cols);           /* cols */
-    write_u16(gw->file, (uint16_t)rows);           /* rows */
-    write_u16(gw->file, (uint16_t)cell_w);         /* cell_w */
-    write_u16(gw->file, (uint16_t)cell_h);         /* cell_h */
-    write_f32(gw->file, fps);                      /* fps */
-    write_u32(gw->file, 0);                        /* frames (placeholder) */
-    write_u16(gw->file, 0);                        /* reserved */
+    int e = 0;
+    e |= (fwrite(GLIF_MAGIC, 1, 4, gw->file) != 4) ? -1 : 0;
+    e |= write_u8(gw->file, GLIF_VERSION);
+    e |= write_u8(gw->file, dark_mode ? GLIF_FLAG_DARK : 0);
+    e |= write_u16(gw->file, (uint16_t)cols);
+    e |= write_u16(gw->file, (uint16_t)rows);
+    e |= write_u16(gw->file, (uint16_t)cell_w);
+    e |= write_u16(gw->file, (uint16_t)cell_h);
+    e |= write_f32(gw->file, fps);
+    e |= write_u32(gw->file, 0);                  /* frames (placeholder) */
+    e |= write_u16(gw->file, 0);                  /* reserved */
+    if (e) { gw->err = 1; }
 
     return 0;
 }
 
 void glif_writer_frame(GlifWriter *gw, const Grid *grid) {
+    if (gw->err) return;
     int total = grid->rows * grid->cols;
     for (int i = 0; i < total; i++) {
         const GridCell *cell = &grid->cells[i];
         uint8_t data[4] = { (uint8_t)cell->ch, cell->r, cell->g, cell->b };
-        fwrite(data, 1, 4, gw->file);
+        if (fwrite(data, 1, 4, gw->file) != 4) { gw->err = 1; return; }
     }
     gw->frames++;
 }
@@ -402,10 +416,10 @@ int glif_writer_finish(GlifWriter *gw) {
 
     /* Seek back to frames field (offset 18) and write actual count */
     if (fseek(gw->file, 18, SEEK_SET) == 0) {
-        write_u32(gw->file, gw->frames);
+        if (write_u32(gw->file, gw->frames) != 0) gw->err = 1;
     }
 
     fclose(gw->file);
     gw->file = NULL;
-    return 0;
+    return gw->err ? -1 : 0;
 }

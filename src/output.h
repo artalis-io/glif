@@ -62,6 +62,7 @@ typedef struct {
     FILE *file;
     uint32_t frames;
     int cells;        /* cols × rows */
+    int err;          /* sticky write-error flag */
 } GlifWriter;
 
 int  glif_writer_init(GlifWriter *gw, const char *path,
