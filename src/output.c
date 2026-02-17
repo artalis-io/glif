@@ -69,21 +69,30 @@ void frame_diff_render(FrameDiff *fd, const Grid *grid, int dark_mode) {
     int cols = grid->cols;
     int total = rows * cols;
 
-    /* Count changed cells to decide: diff vs full redraw */
-    int changed = 0;
+    /* Estimate byte cost of diff vs full redraw.
+     * cell_cost: ~22 bytes (dark) or ~46 bytes (light) per cell
+     * full: cursor_home(3) + total * cell_cost + rows * reset_newline(5)
+     * diff: changed * cell_cost + jumps * cursor_move(~9) + reset(4)
+     * A jump is needed when a changed cell isn't consecutive to the previous. */
+    int cell_cost = dark_mode ? 22 : 46;
+    int changed = 0, jumps = 0;
+    int prev_idx = -2;  /* impossible value so first changed cell counts as jump */
     for (int i = 0; i < total; i++) {
         const GridCell *cell = &grid->cells[i];
-        uint8_t *prev = &fd->prev[i * 4];
-        if (prev[0] != (uint8_t)cell->ch ||
-            prev[1] != cell->r ||
-            prev[2] != cell->g ||
-            prev[3] != cell->b) {
+        uint8_t *pv = &fd->prev[i * 4];
+        if (pv[0] != (uint8_t)cell->ch ||
+            pv[1] != cell->r ||
+            pv[2] != cell->g ||
+            pv[3] != cell->b) {
             changed++;
+            if (i != prev_idx + 1) jumps++;
+            prev_idx = i;
         }
     }
 
-    /* If >50% changed, full redraw is cheaper (no cursor positioning overhead) */
-    if (changed * 2 > total) {
+    int full_cost = 3 + total * cell_cost + rows * 5;
+    int diff_cost = changed * cell_cost + jumps * 9 + 4;
+    if (diff_cost >= full_cost) {
         /* Update prev buffer */
         for (int i = 0; i < total; i++) {
             const GridCell *cell = &grid->cells[i];
