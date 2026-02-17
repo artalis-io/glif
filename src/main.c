@@ -367,6 +367,7 @@ static int run_video(Config *cfg) {
 
     long frames = 0;
     double t_start = time_now();
+    double t_pipeline_total = 0.0, t_render_total = 0.0;
 
     /* Read loop */
     while (fread(frame_buf, 1, frame_size, stdin) == frame_size) {
@@ -382,6 +383,9 @@ static int run_video(Config *cfg) {
         contrast_global(&grid, cfg->global_crunch);
         match_grid(&grid, &db);
 
+        double t_render_start = time_now();
+        t_pipeline_total += t_render_start - t_frame_start;
+
         /* Render */
         if (cfg->color) {
             frame_diff_render(&fd, &grid, cfg->dark_mode);
@@ -391,6 +395,7 @@ static int run_video(Config *cfg) {
             fflush(stdout);
         }
 
+        t_render_total += time_now() - t_render_start;
         frames++;
 
         /* Frame pacing */
@@ -415,6 +420,9 @@ static int run_video(Config *cfg) {
     if (frames > 0) {
         fprintf(stderr, "Played %ld frames in %.1fs (%.1f fps avg)\n",
                 frames, t_total, (double)frames / t_total);
+        fprintf(stderr, "  pipeline: %.2f ms/frame, render: %.2f ms/frame\n",
+                t_pipeline_total / (double)frames * 1e3,
+                t_render_total / (double)frames * 1e3);
     }
 
     /* Cleanup */
