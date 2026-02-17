@@ -71,95 +71,85 @@ The terminal is 95% of frame time. Diff rendering minimizes bytes sent but termi
 
 ---
 
-## WASM + Webcam
+## WASM + Web Frontend ✅
 
-### C Side (compiled to WASM)
+Implemented. The C core compiles to WebAssembly via Emscripten, sharing the same source files as the native build through conditional compilation.
 
-Strip out OS-dependent code — no file I/O, no OpenMP, no terminal detection. Export a clean frame-processing API:
+### Architecture
+
+All OpenMP pragmas are guarded with `#ifdef _OPENMP` — they compile out under `emcc`. WASM SIMD 128-bit (`wasm_simd128.h`) replaces OpenMP SIMD for the grid reduction loops in `grid.c`. OS-specific code in `main.c` (`<sys/ioctl.h>`, `<unistd.h>`, `time_now()`, `nanosleep`, terminal detection) is guarded with `#ifndef __EMSCRIPTEN__`.
+
+### Raw Buffer APIs
+
+Both `image.c` and `font.c` expose buffer-wrapping functions for WASM use (no file I/O needed):
+
+- `image_load_buffer(img, data, w, h, channels)` — wraps an external pixel buffer (RGB or RGBA). `Image.owns_pixels` controls whether `image_free()` calls `stbi_image_free()`.
+- `char_db_create_from_memory(db, font_data, font_len, ...)` — wraps font bytes. `CharDatabase.owns_font_data` controls freeing.
+
+### WASM API (`src/wasm_api.c`)
+
+Exports via `EMSCRIPTEN_KEEPALIVE`:
 
 ```c
-// glif_wasm.h — the WASM-exported API
-
-typedef struct {
-    void *ctx;  // Opaque handle: font DB, sampling config, precomputed masks
-} GlifContext;
-
-// One-time init — JS passes font file bytes
 GlifContext *glif_init(const uint8_t *font_data, int font_len,
-                             int cell_w, int cell_h,
-                             float dir_crunch, float global_crunch);
+                       int cell_w, int cell_h,
+                       float dir_crunch, float global_crunch);
 
-// Per-frame processing
-// pixels: RGB24 input (w * h * 3 bytes)
-// out_chars: output character grid (rows * cols bytes)
-// out_r/g/b: output color per cell (rows * cols bytes each)
-// Returns: rows | (cols << 16)
-int glif_process_frame(GlifContext *ctx,
-                          const uint8_t *pixels, int w, int h,
-                          char *out_chars,
-                          uint8_t *out_r, uint8_t *out_g, uint8_t *out_b);
+int glif_process_frame(GlifContext *ctx, const uint8_t *pixels,
+                       int w, int h, int channels,
+                       char *out_chars, uint8_t *out_r,
+                       uint8_t *out_g, uint8_t *out_b);
+    // Returns: rows | (cols << 16)
 
 void glif_free(GlifContext *ctx);
 ```
 
+`GlifContext` holds `CharDatabase`, `SamplingConfig`, `PrecomputedMasks` (lazy-rebuilt when image stride changes), and crunch parameters.
+
 ### Build
 
-```makefile
-# Emscripten
-wasm-emcc:
-	emcc -O2 -Ivendor -Isrc \
-	  -s EXPORTED_FUNCTIONS='["_glif_init","_glif_process_frame","_glif_free"]' \
-	  -s ALLOW_MEMORY_GROWTH=1 \
-	  -o glif.js \
-	  src/wasm_api.c src/image.c src/sampling.c src/grid.c \
-	  src/font.c src/contrast.c src/match.c
+```bash
+make wasm    # produces web/glif.js + web/glif.wasm
 ```
 
-WASM SIMD (`wasm_simd128.h` intrinsics) replaces OpenMP SIMD for the inner loops. 128-bit SIMD is widely supported in browsers.
+Key flags: `-msimd128`, `MODULARIZE` (factory function `createGlifModule`), `NO_FILESYSTEM`, `--no-entry`.
 
-### JS Side
+### Web Frontend (`web/`)
 
-```js
-const video = document.createElement('video');
-const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-video.srcObject = stream;
+- **`web/glif-wrapper.js`** — `GlifRenderer` class managing WASM heap buffers, auto-growing input/output allocations
+- **`web/index.html`** — drag-and-drop UI with Canvas 2D rendering (`fillText` per cell), webcam support, video/GIF playback via `requestAnimationFrame`, FPS counter
+- RGBA pixels passed directly with `channels=4` — no JS-side conversion needed
 
-const ctx = glif_init(fontBytes, fontBytes.length, 10, 20, 2.0, 2.0);
-
-const capture = new OffscreenCanvas(640, 480);
-const captureCtx = capture.getContext('2d');
-
-function frame() {
-    captureCtx.drawImage(video, 0, 0, 640, 480);
-    const imageData = captureCtx.getImageData(0, 0, 640, 480);
-    const rgb = rgbaToRgb(imageData.data);
-
-    wasmMemory.set(rgb, pixelPtr);
-    glif_process_frame(ctx, pixelPtr, 640, 480, charsPtr, rPtr, gPtr, bPtr);
-
-    renderToCanvas(chars, r, g, b, cols, rows);
-    requestAnimationFrame(frame);
-}
+```bash
+# Serve locally
+cd web && python3 -m http.server 8000
 ```
 
-**Rendering options (JS side):**
-1. **`<pre>` with `<span>` colors** — simplest, DOM-based, works but slow at high cell counts
-2. **Canvas 2D** — `fillText()` per cell with color. Fast enough for 120x40
-3. **WebGL** — font atlas texture, one quad per cell, color as attribute. Fastest
+---
 
-### What Changes Per File
+## Virtual Webcam
 
-| Component | Video mode | WASM mode |
-|-----------|-----------|-----------|
-| image.c | Skip `stbi_load`, accept raw buffer | Same, plus accept RGBA |
-| grid.c | Reuse grid allocation across frames | Same |
-| sampling.c | No change | No change |
-| contrast.c | No change | No change |
-| match.c | No change (per-thread cache) | Single-threaded, one cache |
-| output.c | Add cursor-home ANSI mode | Not used — JS renders |
-| main.c | Add `--video W H` stdin loop | Replaced by `wasm_api.c` |
+### Raw Output Modes
 
-New file: `src/wasm_api.c` (~100 lines) wrapping the pipeline in exported functions.
+Two new CLI flags for lower-overhead piping:
+
+- `--pipe-raw` — raw RGB24 frames to stdout (no PPM headers), for `ffmpeg -f rawvideo`
+- `--v4l2 <device>` — write directly to a Linux v4l2loopback device (eliminates output ffmpeg)
+
+### v4l2loopback (Linux)
+
+```bash
+sudo modprobe v4l2loopback video_nr=10 card_label="Glif ASCII Cam" exclusive_caps=1
+
+# Direct mode (2 processes)
+ffmpeg -f v4l2 -i /dev/video0 -f rawvideo -pix_fmt rgb24 -s 640x480 - 2>/dev/null | \
+  ./glif --video 640 480 -f fonts/SFNSMono.ttf --v4l2 /dev/video10 --dark -s 2
+
+# Or use the convenience script:
+./scripts/glif-webcam.sh
+```
+
+See [docs/webcam.md](webcam.md) for full setup (Linux, macOS, Windows).
 
 ---
 
@@ -169,27 +159,15 @@ New file: `src/wasm_api.c` (~100 lines) wrapping the pipeline in exported functi
 
 The workload is too small. A 120x40 grid is 4,800 cells — GPUs need millions of work items to amortize kernel launch overhead. At 0.69ms/frame on CPU, a GPU path would spend more time on dispatch and data transfer than actual computation.
 
-### Where GPU DOES help: output rendering
+### WebGL Font-Atlas Renderer ✅
 
-Use a fragment shader for rendering the ASCII output — replaces the PPM renderer with real-time GPU-rendered output at arbitrary resolution:
+Implemented in `web/glif-webgl.js`. Replaces per-cell `fillText()` with a single GPU draw call:
 
-```glsl
-uniform sampler2D u_charGrid;    // 120x40, R = character index
-uniform sampler2D u_colorGrid;   // 120x40, RGB = cell color
-uniform sampler2D u_fontAtlas;   // glyph bitmap atlas
+1. Generate a font atlas (16x6 grid of ASCII 32–126) as a texture
+2. Upload character indices and colors as small data textures per frame
+3. Fragment shader samples the atlas for each pixel, compositing colored glyphs on black background
 
-void main() {
-    ivec2 cell = ivec2(gl_FragCoord.xy) / cellSize;
-    int charIdx = int(texelFetch(u_charGrid, cell, 0).r * 255.0);
-    vec3 color = texelFetch(u_colorGrid, cell, 0).rgb;
-
-    vec2 glyphUV = getGlyphUV(charIdx, fract(gl_FragCoord.xy / cellSize));
-    float alpha = texture(u_fontAtlas, glyphUV).r;
-
-    // Color background + white glyph (default blend mode)
-    gl_FragColor = vec4(color + (1.0 - color) * alpha, 1.0);
-}
-```
+Falls back to Canvas 2D `fillText()` if WebGL is unavailable.
 
 ### Architecture
 

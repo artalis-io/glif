@@ -47,7 +47,9 @@ typedef struct {
 
 int ppm_pipe_init(PpmPipe *pp, const Grid *grid, const CharDatabase *db,
                   int scale, int dark_mode);
+void ppm_pipe_render(PpmPipe *pp, const Grid *grid, const CharDatabase *db);
 void ppm_pipe_frame(PpmPipe *pp, const Grid *grid, const CharDatabase *db);
+void raw_pipe_frame(PpmPipe *pp, const Grid *grid, const CharDatabase *db);
 void ppm_pipe_free(PpmPipe *pp);
 
 /* .glif binary format — see docs/roadmap.md for full spec. */

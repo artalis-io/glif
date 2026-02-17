@@ -46,7 +46,7 @@ UTEST(contrast, directional_uniform_preserves_values) {
     SamplingConfig sc;
     sampling_config_init(&sc);
 
-    contrast_directional(&grid, &sc, 2.0f);
+    contrast_directional(&grid, &sc, 2.0f, NULL);
 
     /* val/max = 1.0, pow(1.0, 2.0) * 0.5 = 0.5 — values preserved */
     for (int i = 0; i < 6; i++) {
@@ -65,7 +65,7 @@ UTEST(contrast, directional_suppresses_when_external_brighter) {
     SamplingConfig sc;
     sampling_config_init(&sc);
 
-    contrast_directional(&grid, &sc, 2.0f);
+    contrast_directional(&grid, &sc, 2.0f, NULL);
 
     /* (0.3/0.9)^2 * 0.9 = (1/3)^2 * 0.9 = 0.1 */
     for (int i = 0; i < 6; i++) {
@@ -82,7 +82,7 @@ UTEST(contrast, global_crunch1_preserves_values) {
     Vec10 ext = vec10_zero();
     Grid grid = make_single_cell_grid(shape, ext);
 
-    contrast_global(&grid, 1.0f);
+    contrast_global(&grid, 1.0f, NULL);
 
     ASSERT_NEAR(grid.cells[0].shape.v[0], 0.2f, 1e-5f);
     ASSERT_NEAR(grid.cells[0].shape.v[1], 0.4f, 1e-5f);
@@ -99,7 +99,7 @@ UTEST(contrast, global_crunch_sharpens) {
     Vec10 ext = vec10_zero();
     Grid grid = make_single_cell_grid(shape, ext);
 
-    contrast_global(&grid, 3.0f);
+    contrast_global(&grid, 3.0f, NULL);
 
     /* Max component (1.0) stays 1.0: (1.0/1.0)^3 * 1.0 = 1.0 */
     ASSERT_NEAR(grid.cells[0].shape.v[4], 1.0f, 1e-5f);
@@ -121,10 +121,10 @@ UTEST(contrast, zero_length_vector_stays_zero) {
     SamplingConfig sc;
     sampling_config_init(&sc);
 
-    contrast_directional(&grid, &sc, 1.25f);
+    contrast_directional(&grid, &sc, 1.25f, NULL);
     ASSERT_NEAR(vec6_length(grid.cells[0].shape), 0.0f, 1e-8f);
 
-    contrast_global(&grid, 1.5f);
+    contrast_global(&grid, 1.5f, NULL);
     ASSERT_NEAR(vec6_length(grid.cells[0].shape), 0.0f, 1e-8f);
 
     free(grid.cells);
@@ -139,7 +139,7 @@ UTEST(contrast, directional_preserves_scale) {
     SamplingConfig sc;
     sampling_config_init(&sc);
 
-    contrast_directional(&grid, &sc, 1.0f);
+    contrast_directional(&grid, &sc, 1.0f, NULL);
 
     /* With crunch=1 and external=0, max_val=internal_val,
      * so (val/val)^1 * val = val — values preserved */
@@ -167,7 +167,7 @@ UTEST(contrast, two_by_two_grid) {
     SamplingConfig sc;
     sampling_config_init(&sc);
 
-    contrast_directional(&grid, &sc, 1.25f);
+    contrast_directional(&grid, &sc, 1.25f, NULL);
 
     /* Cell 0: internal > external, values should be modified but stay positive */
     ASSERT_GT(vec6_length(grid.cells[0].shape), 0.1f);
@@ -178,7 +178,7 @@ UTEST(contrast, two_by_two_grid) {
     /* Cell 3: alternating 1.0/0.0, with crunch=1.0 and ext=0, 1.0 stays, 0.0 stays */
     ASSERT_NEAR(grid.cells[3].shape.v[0], 1.0f, 0.01f);
 
-    contrast_global(&grid, 1.5f);
+    contrast_global(&grid, 1.5f, NULL);
 
     /* After global, max component should be preserved */
     float max3 = vec6_max_component(grid.cells[0].shape);
@@ -192,11 +192,79 @@ UTEST(contrast, global_zero_shape_stays_zero) {
     Vec10 ext = vec10_zero();
     Grid grid = make_single_cell_grid(shape, ext);
 
-    contrast_global(&grid, 2.0f);
+    contrast_global(&grid, 2.0f, NULL);
 
     ASSERT_NEAR(vec6_length(grid.cells[0].shape), 0.0f, 1e-8f);
 
     free(grid.cells);
+}
+
+UTEST(contrast, analyze_frame_computes_stats) {
+    Grid grid = make_grid(1, 5);
+    /* 5 cells with increasing brightness */
+    for (int i = 0; i < 5; i++) {
+        uint8_t val = (uint8_t)(i * 50 + 25);  /* 25, 75, 125, 175, 225 */
+        grid.cells[i].r = val;
+        grid.cells[i].g = val;
+        grid.cells[i].b = val;
+    }
+
+    AdaptiveContrast ac = { .floor = 0.02f, .ceil = 0.31f };
+    contrast_analyze_frame(&ac, &grid);
+
+    /* avg = mean of (25,75,125,175,225)/255 = 125/255 ≈ 0.49 */
+    ASSERT_NEAR(ac.frame_avg, 125.0f / 255.0f, 0.02f);
+    /* p10 and p90 should bracket the range */
+    ASSERT_LT(ac.frame_p10, ac.frame_avg);
+    ASSERT_GT(ac.frame_p90, ac.frame_avg);
+
+    free(grid.cells);
+}
+
+UTEST(contrast, adaptive_dark_frame_less_crunch_than_bright) {
+    /* Two identical grids, one "dark frame" and one "bright frame".
+     * The dark frame should get less effective crunch for the same cell. */
+    Vec6 shape = {{0.3f, 0.3f, 0.3f, 0.3f, 0.3f, 0.3f}};
+    Vec10 ext = {{0.9f, 0.9f, 0.9f, 0.9f, 0.9f, 0.9f, 0.9f, 0.9f, 0.9f, 0.9f}};
+
+    /* Dark frame: all cells dim */
+    Grid dark_grid = make_grid(1, 4);
+    for (int i = 0; i < 4; i++) {
+        dark_grid.cells[i].shape = shape;
+        dark_grid.cells[i].external = ext;
+        dark_grid.cells[i].r = 20;
+        dark_grid.cells[i].g = 20;
+        dark_grid.cells[i].b = 20;
+    }
+
+    /* Bright frame: all cells bright */
+    Grid bright_grid = make_grid(1, 4);
+    for (int i = 0; i < 4; i++) {
+        bright_grid.cells[i].shape = shape;
+        bright_grid.cells[i].external = ext;
+        bright_grid.cells[i].r = 200;
+        bright_grid.cells[i].g = 200;
+        bright_grid.cells[i].b = 200;
+    }
+
+    SamplingConfig sc;
+    sampling_config_init(&sc);
+    AdaptiveContrast ac_dark = { .floor = 0.02f, .ceil = 0.31f };
+    AdaptiveContrast ac_bright = { .floor = 0.02f, .ceil = 0.31f };
+
+    contrast_analyze_frame(&ac_dark, &dark_grid);
+    contrast_analyze_frame(&ac_bright, &bright_grid);
+
+    contrast_directional(&dark_grid, &sc, 2.5f, &ac_dark);
+    contrast_directional(&bright_grid, &sc, 2.5f, &ac_bright);
+
+    /* Dark frame shape values should be higher (less suppressed) than bright */
+    float dark_len = vec6_length(dark_grid.cells[0].shape);
+    float bright_len = vec6_length(bright_grid.cells[0].shape);
+    ASSERT_GT(dark_len, bright_len);
+
+    free(dark_grid.cells);
+    free(bright_grid.cells);
 }
 
 UTEST_MAIN();

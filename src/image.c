@@ -15,15 +15,27 @@ int image_load(Image *img, const char *path) {
         return -1;
     }
     img->channels = 3;
+    img->owns_pixels = 1;
+    return 0;
+}
+
+int image_load_buffer(Image *img, const uint8_t *data, int w, int h, int channels) {
+    if (!data || w < 1 || h < 1 || (channels != 3 && channels != 4))
+        return -1;
+    img->width = w;
+    img->height = h;
+    img->channels = channels;
+    img->pixels = (uint8_t *)data;
+    img->owns_pixels = 0;
     return 0;
 }
 
 void image_free(Image *img) {
     if (!img) return;
-    if (img->pixels) {
+    if (img->pixels && img->owns_pixels) {
         stbi_image_free(img->pixels);
-        img->pixels = NULL;
     }
+    img->pixels = NULL;
 }
 
 /* sRGB -> linear LUT: precomputed for all 256 byte values */
@@ -52,7 +64,9 @@ int lightness_map_update(LightnessMap *lm, const Image *img) {
     int channels = img->channels;
     float *dest = lm->data;
 
+#ifdef _OPENMP
     #pragma omp parallel for schedule(static)
+#endif
     for (size_t i = 0; i < npixels; i++) {
         const uint8_t *px = pixels + i * channels;
         dest[i] = 0.2126f * srgb_lut[px[0]]
@@ -75,7 +89,9 @@ int lightness_map_create(LightnessMap *lm, const Image *img) {
     int channels = img->channels;
     float *dest = lm->data;
 
+#ifdef _OPENMP
     #pragma omp parallel for schedule(static)
+#endif
     for (size_t i = 0; i < npixels; i++) {
         const uint8_t *px = pixels + i * channels;
         dest[i] = 0.2126f * srgb_lut[px[0]]
@@ -83,6 +99,44 @@ int lightness_map_create(LightnessMap *lm, const Image *img) {
                 + 0.0722f * srgb_lut[px[2]];
     }
     return 0;
+}
+
+static int float_cmp(const void *a, const void *b) {
+    float fa = *(const float *)a, fb = *(const float *)b;
+    return (fa > fb) - (fa < fb);
+}
+
+void lightness_map_normalize(LightnessMap *lm) {
+    size_t n = (size_t)lm->width * (size_t)lm->height;
+    if (n < 2) return;
+
+    /* Compute p5 and p95 from a sorted copy */
+    float *sorted = malloc(n * sizeof(float));
+    if (!sorted) return;
+
+    for (size_t i = 0; i < n; i++)
+        sorted[i] = lm->data[i];
+
+    qsort(sorted, n, sizeof(float), float_cmp);
+
+    float p5  = sorted[n / 20];        /* 5th percentile */
+    float p95 = sorted[n - 1 - n / 20]; /* 95th percentile */
+    free(sorted);
+
+    float range = p95 - p5;
+    if (range < 1e-4f) return; /* near-uniform frame, skip */
+
+    float inv_range = 1.0f / range;
+
+#ifdef _OPENMP
+    #pragma omp parallel for schedule(static)
+#endif
+    for (size_t i = 0; i < n; i++) {
+        float v = (lm->data[i] - p5) * inv_range;
+        if (v < 0.0f) v = 0.0f;
+        if (v > 1.0f) v = 1.0f;
+        lm->data[i] = v;
+    }
 }
 
 void lightness_map_free(LightnessMap *lm) {

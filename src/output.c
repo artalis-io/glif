@@ -273,7 +273,7 @@ int ppm_pipe_init(PpmPipe *pp, const Grid *grid, const CharDatabase *db,
     return 0;
 }
 
-void ppm_pipe_frame(PpmPipe *pp, const Grid *grid, const CharDatabase *db) {
+void ppm_pipe_render(PpmPipe *pp, const Grid *grid, const CharDatabase *db) {
     int rw = pp->rw, rh = pp->rh;
     size_t img_w = pp->img_w;
     int dark_mode = pp->dark_mode;
@@ -314,10 +314,18 @@ void ppm_pipe_frame(PpmPipe *pp, const Grid *grid, const CharDatabase *db) {
             }
         }
     }
+}
 
-    /* Write PPM header + pixels to stdout */
+void ppm_pipe_frame(PpmPipe *pp, const Grid *grid, const CharDatabase *db) {
+    ppm_pipe_render(pp, grid, db);
     fprintf(stdout, "P6\n%zu %zu\n255\n", pp->img_w, pp->img_h);
-    fwrite(pixels, 1, pp->img_w * pp->img_h * 3, stdout);
+    fwrite(pp->pixels, 1, pp->img_w * pp->img_h * 3, stdout);
+    fflush(stdout);
+}
+
+void raw_pipe_frame(PpmPipe *pp, const Grid *grid, const CharDatabase *db) {
+    ppm_pipe_render(pp, grid, db);
+    fwrite(pp->pixels, 1, pp->img_w * pp->img_h * 3, stdout);
     fflush(stdout);
 }
 

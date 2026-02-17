@@ -20,6 +20,9 @@ tools/bench
 # Test image generator
 tools/gen_test_images
 
+# Test images
+images/
+
 # Videos (download your own test clips)
 videos/
 
@@ -35,3 +38,7 @@ videos/
 
 # Output files
 *.ppm
+
+# WASM build output
+web/glif.js
+web/glif.wasm

@@ -637,6 +637,85 @@ UTEST(output, ppm_pipe_dark_vs_light_differ) {
     char_db_free(&db);
 }
 
+/* ---- raw_pipe_frame tests ---- */
+
+UTEST(output, raw_pipe_frame_no_ppm_header) {
+    SamplingConfig sc;
+    sampling_config_init(&sc);
+    CharDatabase db;
+    if (char_db_create(&db, "fonts/SFNSMono.ttf", 10, 20, &sc) != 0) return;
+
+    Grid grid = make_test_grid(2, 3, 10, 20, 'R');
+
+    PpmPipe pp;
+    ASSERT_EQ(ppm_pipe_init(&pp, &grid, &db, 1, 1), 0);
+
+    /* Capture raw_pipe_frame output */
+    const char *path = "/tmp/glif_test_raw_frame.bin";
+    fflush(stdout);
+    int saved_fd = dup(STDOUT_FILENO);
+    int file_fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    dup2(file_fd, STDOUT_FILENO);
+    close(file_fd);
+
+    raw_pipe_frame(&pp, &grid, &db);
+
+    fflush(stdout);
+    dup2(saved_fd, STDOUT_FILENO);
+    close(saved_fd);
+
+    /* File should be exactly img_w * img_h * 3 bytes (no PPM header) */
+    FILE *f = fopen(path, "rb");
+    ASSERT_TRUE(f != NULL);
+    fseek(f, 0, SEEK_END);
+    long file_size = ftell(f);
+    fclose(f);
+
+    long expected = (long)(pp.img_w * pp.img_h * 3);
+    ASSERT_EQ(file_size, expected);
+
+    /* Verify it does NOT start with "P6" */
+    f = fopen(path, "rb");
+    char header[2] = {0};
+    fread(header, 1, 2, f);
+    fclose(f);
+    ASSERT_TRUE(header[0] != 'P' || header[1] != '6');
+
+    remove(path);
+    ppm_pipe_free(&pp);
+    free(grid.cells);
+    char_db_free(&db);
+}
+
+UTEST(output, ppm_pipe_render_fills_buffer) {
+    SamplingConfig sc;
+    sampling_config_init(&sc);
+    CharDatabase db;
+    if (char_db_create(&db, "fonts/SFNSMono.ttf", 10, 20, &sc) != 0) return;
+
+    Grid grid = make_test_grid(2, 2, 10, 20, 'M');
+
+    PpmPipe pp;
+    ASSERT_EQ(ppm_pipe_init(&pp, &grid, &db, 1, 1), 0);
+
+    /* Zero out buffer, then call render */
+    memset(pp.pixels, 0, pp.img_w * pp.img_h * 3);
+    ppm_pipe_render(&pp, &grid, &db);
+
+    /* With dark mode and colored cells (r=200,g=100,b=50), some pixels
+     * should be non-zero where glyphs are rendered */
+    int nonzero = 0;
+    size_t total = pp.img_w * pp.img_h * 3;
+    for (size_t i = 0; i < total; i++) {
+        if (pp.pixels[i] != 0) { nonzero = 1; break; }
+    }
+    ASSERT_TRUE(nonzero);
+
+    ppm_pipe_free(&pp);
+    free(grid.cells);
+    char_db_free(&db);
+}
+
 /* ---- GlifWriter tests ---- */
 
 /* Helper: read little-endian values from buffer */

@@ -21,6 +21,13 @@ BIN = glif
 LIB_OBJ = src/image.o src/sampling.o src/grid.o src/font.o \
            src/contrast.o src/match.o src/output.o
 
+# Linux-only: v4l2 output
+UNAME := $(shell uname)
+ifeq ($(UNAME), Linux)
+  SRC += src/platform/linux/v4l2_output.c
+  LIB_OBJ += src/platform/linux/v4l2_output.o
+endif
+
 TESTS = tests/test_vec6 tests/test_sampling tests/test_image \
         tests/test_grid tests/test_contrast tests/test_match \
         tests/test_font tests/test_output
@@ -31,6 +38,12 @@ $(BIN): $(OBJ)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
 src/%.o: src/%.c
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+src/platform/linux/%.o: src/platform/linux/%.c
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+src/platform/wasm/%.o: src/platform/wasm/%.c
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 # Test targets — each links against the library objects it needs
@@ -74,7 +87,49 @@ tools/bench: tools/bench.c $(LIB_OBJ)
 debug: clean
 	$(CC) $(DEBUG_CFLAGS) -o $(BIN) $(SRC) $(DEBUG_LDFLAGS)
 
+# Core library (shared between native + WASM)
+CORE_SRC = src/image.c src/sampling.c src/grid.c src/font.c \
+           src/contrast.c src/match.c
+
+# Legacy WASM build (old JS-based UI)
+WASM_LEGACY_SRC = $(CORE_SRC) src/platform/wasm/wasm_api.c
+
+wasm-legacy: $(WASM_LEGACY_SRC)
+	@mkdir -p web
+	emcc -std=c11 -O2 -msimd128 -Ivendor -Isrc \
+	  -s WASM=1 -s ALLOW_MEMORY_GROWTH=1 \
+	  -s MODULARIZE=1 -s EXPORT_NAME='createGlifModule' \
+	  -s "EXPORTED_FUNCTIONS=['_glif_init','_glif_process_frame','_glif_free','_malloc','_free']" \
+	  -s "EXPORTED_RUNTIME_METHODS=['ccall','cwrap','HEAPU8','HEAP8']" \
+	  -s NO_FILESYSTEM=1 --no-entry \
+	  -o web/glif.js $(WASM_LEGACY_SRC) -lm
+
+# WASM build via Emscripten (Nuklear + Clay UI)
+WASM_UI_SRC = $(CORE_SRC) \
+              src/platform/wasm/ui.c \
+              src/platform/wasm/nk_webgl.c \
+              src/platform/wasm/nk_impl.c \
+              src/platform/wasm/clay_impl.c \
+              src/platform/wasm/ui_layout.c
+WASM_UI_OUT = web/glif.js
+
+WASM_EXPORTS = '_app_init','_app_resize','_app_frame','_app_mouse','_app_key', \
+               '_app_touch','_app_load_font','_app_load_image','_app_video_frame', \
+               '_app_switch_camera','_app_get_camera_count','_malloc','_free'
+
+wasm: $(WASM_UI_SRC)
+	@mkdir -p web
+	emcc -std=gnu11 -O2 -msimd128 -Ivendor -Isrc \
+	  -Isrc/platform/wasm \
+	  -s WASM=1 -s ALLOW_MEMORY_GROWTH=1 -s FULL_ES2=1 \
+	  -s MODULARIZE=1 -s EXPORT_NAME='createGlifModule' \
+	  -s "EXPORTED_FUNCTIONS=[$(WASM_EXPORTS)]" \
+	  -s "EXPORTED_RUNTIME_METHODS=['ccall','cwrap','HEAPU8','HEAP8']" \
+	  -s NO_FILESYSTEM=1 --no-entry \
+	  -o $(WASM_UI_OUT) $(WASM_UI_SRC) -lm
+
 clean:
 	rm -f $(OBJ) $(BIN) $(TESTS)
+	rm -f src/platform/linux/*.o src/platform/wasm/*.o
 
-.PHONY: all clean test debug
+.PHONY: all clean test debug wasm wasm-legacy

@@ -1,9 +1,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifndef __EMSCRIPTEN__
 #include <time.h>
 #include <sys/ioctl.h>
 #include <unistd.h>
+#endif
 #include "image.h"
 #include "sampling.h"
 #include "grid.h"
@@ -11,6 +13,9 @@
 #include "contrast.h"
 #include "match.h"
 #include "output.h"
+#ifdef __linux__
+#include "platform/linux/v4l2_output.h"
+#endif
 
 typedef struct {
     const char *input_path;
@@ -29,7 +34,10 @@ typedef struct {
     int video_h;   /* video frame height */
     float fps;     /* target fps (0 = unlimited) */
     int pipe_ppm;  /* video: write PPM frames to stdout instead of ANSI */
+    int pipe_raw;  /* video: write raw RGB24 frames to stdout (no headers) */
     const char *glif_path; /* video: write .glif binary file */
+    const char *v4l2_device; /* video: write to v4l2loopback device (Linux) */
+    AdaptiveContrast adaptive; /* adaptive contrast params */
 } Config;
 
 static void usage(const char *prog) {
@@ -48,9 +56,14 @@ static void usage(const char *prog) {
         "  -a, --auto-fit           Fit output to terminal size\n"
         "  -s, --scale <n>          PPM render scale (default: 4)\n"
         "  --dark                   PPM: black bg + colored glyphs\n"
+        "  --adaptive               Adaptive contrast (per-frame, less crunch in shadows)\n"
+        "  --adapt-floor <0-255>    Noise floor relative to frame range (default: 5)\n"
+        "  --adapt-ceil <0-255>     Midtone ceiling relative to frame range (default: 80)\n"
         "  --video <W> <H>          Video mode: read raw RGB24 frames from stdin\n"
         "  --fps <n>                Target framerate for video mode (default: 30)\n"
         "  --pipe-ppm               Video: write PPM frames to stdout (for ffmpeg)\n"
+        "  --pipe-raw               Video: write raw RGB24 frames to stdout (no headers)\n"
+        "  --v4l2 <device>          Video: write to v4l2loopback device (Linux only)\n"
         "  --output-glif <path>     Video: write .glif binary capture file\n"
         "  --help                   Show this message\n",
         prog, prog);
@@ -73,7 +86,11 @@ static int parse_args(Config *cfg, int argc, char **argv) {
     cfg->video_h = 0;
     cfg->fps = 30.0f;
     cfg->pipe_ppm = 0;
+    cfg->pipe_raw = 0;
     cfg->glif_path = NULL;
+    cfg->v4l2_device = NULL;
+    cfg->adaptive.floor = -1.0f;  /* disabled by default */
+    cfg->adaptive.ceil = 80.0f / 255.0f;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--help") == 0) {
@@ -138,8 +155,32 @@ static int parse_args(Config *cfg, int argc, char **argv) {
             cfg->fps = val;
         } else if (strcmp(argv[i], "--dark") == 0) {
             cfg->dark_mode = 1;
+        } else if (strcmp(argv[i], "--adaptive") == 0) {
+            cfg->adaptive.floor = 5.0f / 255.0f;
+        } else if (strcmp(argv[i], "--adapt-floor") == 0) {
+            if (++i >= argc) { fprintf(stderr, "error: --adapt-floor requires argument\n"); return -1; }
+            char *end;
+            long val = strtol(argv[i], &end, 10);
+            if (end == argv[i] || *end != '\0' || val < 0 || val > 255) {
+                fprintf(stderr, "error: invalid adapt-floor '%s' (must be 0-255)\n", argv[i]); return -1;
+            }
+            cfg->adaptive.floor = (float)val / 255.0f;
+        } else if (strcmp(argv[i], "--adapt-ceil") == 0) {
+            if (++i >= argc) { fprintf(stderr, "error: --adapt-ceil requires argument\n"); return -1; }
+            char *end;
+            long val = strtol(argv[i], &end, 10);
+            if (end == argv[i] || *end != '\0' || val < 0 || val > 255) {
+                fprintf(stderr, "error: invalid adapt-ceil '%s' (must be 0-255)\n", argv[i]); return -1;
+            }
+            cfg->adaptive.ceil = (float)val / 255.0f;
+            if (cfg->adaptive.floor < 0.0f) cfg->adaptive.floor = 5.0f / 255.0f;
         } else if (strcmp(argv[i], "--pipe-ppm") == 0) {
             cfg->pipe_ppm = 1;
+        } else if (strcmp(argv[i], "--pipe-raw") == 0) {
+            cfg->pipe_raw = 1;
+        } else if (strcmp(argv[i], "--v4l2") == 0) {
+            if (++i >= argc) { fprintf(stderr, "error: --v4l2 requires device path\n"); return -1; }
+            cfg->v4l2_device = argv[i];
         } else if (strcmp(argv[i], "--output-glif") == 0) {
             if (++i >= argc) { fprintf(stderr, "error: --output-glif requires path\n"); return -1; }
             cfg->glif_path = argv[i];
@@ -183,14 +224,26 @@ static int parse_args(Config *cfg, int argc, char **argv) {
         fprintf(stderr, "error: cell dimensions must be 2-10000\n");
         return -1;
     }
+    if (cfg->pipe_ppm && cfg->pipe_raw) {
+        fprintf(stderr, "error: --pipe-ppm and --pipe-raw are mutually exclusive\n");
+        return -1;
+    }
+#ifndef __linux__
+    if (cfg->v4l2_device) {
+        fprintf(stderr, "error: --v4l2 output is Linux-only\n");
+        return -1;
+    }
+#endif
     return 0;
 }
 
+#ifndef __EMSCRIPTEN__
 static double time_now(void) {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (double)ts.tv_sec + (double)ts.tv_nsec * 1e-9;
 }
+#endif
 
 static int run_image(Config *cfg) {
     /* 1. Load image */
@@ -198,6 +251,7 @@ static int run_image(Config *cfg) {
     if (image_load(&img, cfg->input_path) != 0)
         return 1;
 
+#ifndef __EMSCRIPTEN__
     /* 1b. Auto-fit cell size to terminal */
     if (cfg->auto_fit) {
         struct winsize ws;
@@ -213,6 +267,7 @@ static int run_image(Config *cfg) {
             fprintf(stderr, "warning: cannot detect terminal size, using defaults\n");
         }
     }
+#endif
 
     /* 2. Compute lightness map */
     LightnessMap lm = { .data = NULL };
@@ -256,10 +311,13 @@ static int run_image(Config *cfg) {
     }
 
     /* 6–10. Pipeline */
+    if (cfg->adaptive.floor >= 0.0f)
+        lightness_map_normalize(&lm);
     grid_compute_vectors_fast(&grid, &lm, &pm);
     grid_compute_colors(&grid, &img);
-    contrast_directional(&grid, &sc, cfg->dir_crunch);
-    contrast_global(&grid, cfg->global_crunch);
+    contrast_analyze_frame(&cfg->adaptive, &grid);
+    contrast_directional(&grid, &sc, cfg->dir_crunch, &cfg->adaptive);
+    contrast_global(&grid, cfg->global_crunch, &cfg->adaptive);
     match_grid(&grid, &db);
 
     /* 11. Output */
@@ -290,6 +348,7 @@ static int run_video(Config *cfg) {
     int h = cfg->video_h;
     size_t frame_size = (size_t)w * (size_t)h * 3;
 
+#ifndef __EMSCRIPTEN__
     /* Auto-fit cell size to terminal if requested */
     if (cfg->auto_fit) {
         struct winsize ws;
@@ -303,6 +362,7 @@ static int run_video(Config *cfg) {
                     ws.ws_col, ws.ws_row, cfg->cell_w, cfg->cell_h);
         }
     }
+#endif
 
     /* One-time init */
     SamplingConfig sc;
@@ -328,7 +388,7 @@ static int run_video(Config *cfg) {
         return 1;
     }
 
-    Image img = { .width = w, .height = h, .channels = 3, .pixels = frame_buf };
+    Image img = { .width = w, .height = h, .channels = 3, .pixels = frame_buf, .owns_pixels = 0 };
     Grid grid;
     if (grid_create(&grid, &img, cfg->cell_w, cfg->cell_h) != 0) {
         fprintf(stderr, "error: video %dx%d too small for cell size %dx%d\n",
@@ -352,7 +412,9 @@ static int run_video(Config *cfg) {
         return 1;
     }
 
+#ifndef __EMSCRIPTEN__
     double frame_interval = cfg->fps > 0.0f ? 1.0 / (double)cfg->fps : 0.0;
+#endif
     int cols = grid.cols;
     int rows = grid.rows;
 
@@ -360,6 +422,9 @@ static int run_video(Config *cfg) {
     FrameDiff fd = {0};
     PpmPipe pp = {0};
     GlifWriter gw = {0};
+#ifdef __linux__
+    V4l2Output vo = {0};
+#endif
     if (cfg->glif_path) {
         if (glif_writer_init(&gw, cfg->glif_path, cols, rows,
                              cfg->cell_w, cfg->cell_h,
@@ -372,7 +437,8 @@ static int run_video(Config *cfg) {
             return 1;
         }
     }
-    if (cfg->pipe_ppm) {
+    int needs_ppm_pipe = cfg->pipe_ppm || cfg->pipe_raw || cfg->v4l2_device;
+    if (needs_ppm_pipe) {
         if (ppm_pipe_init(&pp, &grid, &db, cfg->scale, cfg->dark_mode) != 0) {
             fprintf(stderr, "error: failed to allocate PPM pipe buffer\n");
             free(lm.data);
@@ -393,40 +459,74 @@ static int run_video(Config *cfg) {
             return 1;
         }
     }
+#ifdef __linux__
+    if (cfg->v4l2_device) {
+        if (v4l2_output_init(&vo, cfg->v4l2_device,
+                             (int)pp.img_w, (int)pp.img_h) != 0) {
+            ppm_pipe_free(&pp);
+            free(lm.data);
+            grid_free(&grid);
+            free(frame_buf);
+            char_db_free(&db);
+            sampling_precompute_free(&pm);
+            return 1;
+        }
+    }
+#endif
 
     fprintf(stderr, "Video: %dx%d @ %.0f fps, grid %dx%d (%d cells)\n",
             w, h, cfg->fps, cols, rows, cols * rows);
-    int terminal_output = !cfg->pipe_ppm && !(cfg->glif_path && !cfg->color);
+    if (cfg->pipe_raw) {
+        fprintf(stderr, "Raw output: %zux%zu RGB24 (%dx%d grid, scale %d)\n",
+                pp.img_w, pp.img_h, cols, rows, cfg->scale);
+    }
+    int terminal_output = !needs_ppm_pipe && !(cfg->glif_path && !cfg->color);
     if (terminal_output) {
         printf("\033[?25l\033[2J");
         fflush(stdout);
     }
 
     long frames = 0;
+#ifndef __EMSCRIPTEN__
     double t_start = time_now();
     double t_pipeline_total = 0.0, t_render_total = 0.0;
+#endif
 
     /* Read loop */
     while (fread(frame_buf, 1, frame_size, stdin) == frame_size) {
+#ifndef __EMSCRIPTEN__
         double t_frame_start = time_now();
+#endif
 
         /* Recompute lightness map in-place */
         if (lightness_map_update(&lm, &img) != 0) break;
+        if (cfg->adaptive.floor >= 0.0f)
+            lightness_map_normalize(&lm);
 
         /* Pipeline */
         grid_compute_vectors_fast(&grid, &lm, &pm);
         grid_compute_colors(&grid, &img);
-        contrast_directional(&grid, &sc, cfg->dir_crunch);
-        contrast_global(&grid, cfg->global_crunch);
+        contrast_analyze_frame(&cfg->adaptive, &grid);
+        contrast_directional(&grid, &sc, cfg->dir_crunch, &cfg->adaptive);
+        contrast_global(&grid, cfg->global_crunch, &cfg->adaptive);
         match_grid(&grid, &db);
 
+#ifndef __EMSCRIPTEN__
         double t_render_start = time_now();
         t_pipeline_total += t_render_start - t_frame_start;
+#endif
 
         /* Render */
         if (gw.file) glif_writer_frame(&gw, &grid);
 
-        if (cfg->pipe_ppm) {
+        if (cfg->v4l2_device) {
+            ppm_pipe_render(&pp, &grid, &db);
+#ifdef __linux__
+            v4l2_output_frame(&vo, pp.pixels);
+#endif
+        } else if (cfg->pipe_raw) {
+            raw_pipe_frame(&pp, &grid, &db);
+        } else if (cfg->pipe_ppm) {
             ppm_pipe_frame(&pp, &grid, &db);
         } else if (cfg->color) {
             frame_diff_render(&fd, &grid, cfg->dark_mode);
@@ -436,9 +536,12 @@ static int run_video(Config *cfg) {
             fflush(stdout);
         }
 
+#ifndef __EMSCRIPTEN__
         t_render_total += time_now() - t_render_start;
+#endif
         frames++;
 
+#ifndef __EMSCRIPTEN__
         /* Frame pacing */
         if (frame_interval > 0.0) {
             double elapsed = time_now() - t_frame_start;
@@ -450,9 +553,12 @@ static int run_video(Config *cfg) {
                 nanosleep(&ts_sleep, NULL);
             }
         }
+#endif
     }
 
+#ifndef __EMSCRIPTEN__
     double t_total = time_now() - t_start;
+#endif
 
     /* Show cursor, reset colors */
     if (terminal_output) {
@@ -460,6 +566,7 @@ static int run_video(Config *cfg) {
         fflush(stdout);
     }
 
+#ifndef __EMSCRIPTEN__
     if (frames > 0) {
         fprintf(stderr, "Played %ld frames in %.1fs (%.1f fps avg)\n",
                 frames, t_total, (double)frames / t_total);
@@ -467,6 +574,7 @@ static int run_video(Config *cfg) {
                 t_pipeline_total / (double)frames * 1e3,
                 t_render_total / (double)frames * 1e3);
     }
+#endif
 
     /* Cleanup */
     if (gw.file) {
@@ -474,6 +582,9 @@ static int run_video(Config *cfg) {
         fprintf(stderr, "Wrote %s (%u frames, %d×%d grid, %.1f fps)\n",
                 cfg->glif_path, gw.frames, cols, rows, cfg->fps);
     }
+#ifdef __linux__
+    if (cfg->v4l2_device) v4l2_output_free(&vo);
+#endif
     ppm_pipe_free(&pp);
     frame_diff_free(&fd);
     free(lm.data);
