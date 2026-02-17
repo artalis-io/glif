@@ -153,8 +153,25 @@ int char_db_create(CharDatabase *db, const char *font_path,
                                               cx_px, cy_px, r_px);
         }
 
-        /* Normalize shape vector */
-        db->entries[i].shape = vec6_normalize(shape);
+        db->entries[i].shape = shape;
+    }
+
+    /* Per-component max normalization across all characters:
+     * Find the max value in each dimension, then divide each character's
+     * component by that max. This preserves density differences between
+     * characters (e.g., 'W' vs '.') while mapping each dimension to [0,1]. */
+    float comp_max[NUM_INTERNAL] = {0};
+    for (int i = 0; i < CHAR_COUNT; i++) {
+        for (int s = 0; s < NUM_INTERNAL; s++) {
+            if (db->entries[i].shape.v[s] > comp_max[s])
+                comp_max[s] = db->entries[i].shape.v[s];
+        }
+    }
+    for (int i = 0; i < CHAR_COUNT; i++) {
+        for (int s = 0; s < NUM_INTERNAL; s++) {
+            if (comp_max[s] > 1e-8f)
+                db->entries[i].shape.v[s] /= comp_max[s];
+        }
     }
 
     return 0;

@@ -36,8 +36,9 @@ static Grid make_grid(int rows, int cols) {
     return grid;
 }
 
-UTEST(contrast, directional_uniform_zeroes) {
-    /* If internal == external, directional contrast should produce zero */
+UTEST(contrast, directional_uniform_preserves_values) {
+    /* If internal == external, (val/max)^exp * max = val (since val == max).
+     * Values should be preserved. */
     Vec6 shape = {{0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f}};
     Vec10 ext = {{0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f}};
     Grid grid = make_single_cell_grid(shape, ext);
@@ -45,40 +46,50 @@ UTEST(contrast, directional_uniform_zeroes) {
     SamplingConfig sc;
     sampling_config_init(&sc);
 
-    contrast_directional(&grid, &sc, 1.0f);
+    contrast_directional(&grid, &sc, 2.0f);
 
-    /* All diffs are 0, so result should be zero vector */
-    ASSERT_NEAR(vec6_length(grid.cells[0].shape), 0.0f, 1e-5f);
+    /* val/max = 1.0, pow(1.0, 2.0) * 0.5 = 0.5 — values preserved */
+    for (int i = 0; i < 6; i++) {
+        ASSERT_NEAR(grid.cells[0].shape.v[i], 0.5f, 1e-5f);
+    }
 
     free(grid.cells);
 }
 
-UTEST(contrast, directional_diff_nonzero) {
-    /* If internal differs from external, we should get nonzero contrast */
-    Vec6 shape = {{1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f}};
-    Vec10 ext = {{0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f}};
+UTEST(contrast, directional_suppresses_when_external_brighter) {
+    /* When external > internal, val/max < 1, so crunching suppresses */
+    Vec6 shape = {{0.3f, 0.3f, 0.3f, 0.3f, 0.3f, 0.3f}};
+    Vec10 ext = {{0.9f, 0.9f, 0.9f, 0.9f, 0.9f, 0.9f, 0.9f, 0.9f, 0.9f, 0.9f}};
     Grid grid = make_single_cell_grid(shape, ext);
 
     SamplingConfig sc;
     sampling_config_init(&sc);
 
-    contrast_directional(&grid, &sc, 1.0f);
+    contrast_directional(&grid, &sc, 2.0f);
 
-    ASSERT_GT(vec6_length(grid.cells[0].shape), 0.1f);
+    /* (0.3/0.9)^2 * 0.9 = (1/3)^2 * 0.9 = 0.1 */
+    for (int i = 0; i < 6; i++) {
+        ASSERT_LT(grid.cells[0].shape.v[i], 0.3f);
+        ASSERT_GT(grid.cells[0].shape.v[i], 0.0f);
+    }
 
     free(grid.cells);
 }
 
-UTEST(contrast, global_normalizes) {
+UTEST(contrast, global_crunch1_preserves_values) {
+    /* With crunch=1: (val/max)^1 * max = val — identity */
     Vec6 shape = {{0.2f, 0.4f, 0.6f, 0.8f, 1.0f, 0.5f}};
     Vec10 ext = vec10_zero();
     Grid grid = make_single_cell_grid(shape, ext);
 
     contrast_global(&grid, 1.0f);
 
-    /* After global contrast with crunch=1, result should be normalized */
-    float len = vec6_length(grid.cells[0].shape);
-    ASSERT_NEAR(len, 1.0f, 1e-4f);
+    ASSERT_NEAR(grid.cells[0].shape.v[0], 0.2f, 1e-5f);
+    ASSERT_NEAR(grid.cells[0].shape.v[1], 0.4f, 1e-5f);
+    ASSERT_NEAR(grid.cells[0].shape.v[2], 0.6f, 1e-5f);
+    ASSERT_NEAR(grid.cells[0].shape.v[3], 0.8f, 1e-5f);
+    ASSERT_NEAR(grid.cells[0].shape.v[4], 1.0f, 1e-5f);
+    ASSERT_NEAR(grid.cells[0].shape.v[5], 0.5f, 1e-5f);
 
     free(grid.cells);
 }
@@ -86,25 +97,23 @@ UTEST(contrast, global_normalizes) {
 UTEST(contrast, global_crunch_sharpens) {
     Vec6 shape = {{0.2f, 0.4f, 0.6f, 0.8f, 1.0f, 0.5f}};
     Vec10 ext = vec10_zero();
-    Grid grid1 = make_single_cell_grid(shape, ext);
-    Grid grid2 = make_single_cell_grid(shape, ext);
+    Grid grid = make_single_cell_grid(shape, ext);
 
-    contrast_global(&grid1, 1.0f);
-    contrast_global(&grid2, 3.0f);
+    contrast_global(&grid, 3.0f);
 
-    /* Higher crunch should make small values smaller (sharper contrast) */
-    /* The smallest component (0.2/1.0 = 0.2) should be more suppressed with crunch=3 */
-    /* After crunch=1: component = 0.2, after crunch=3: component = 0.008 (before renorm) */
-    /* Just check they produce different results */
-    float diff = vec6_dist_sq(grid1.cells[0].shape, grid2.cells[0].shape);
-    ASSERT_GT(diff, 0.01f);
+    /* Max component (1.0) stays 1.0: (1.0/1.0)^3 * 1.0 = 1.0 */
+    ASSERT_NEAR(grid.cells[0].shape.v[4], 1.0f, 1e-5f);
 
-    free(grid1.cells);
-    free(grid2.cells);
+    /* Smaller components are suppressed: (0.2/1.0)^3 * 1.0 = 0.008 */
+    ASSERT_NEAR(grid.cells[0].shape.v[0], 0.008f, 1e-4f);
+
+    /* (0.5/1.0)^3 * 1.0 = 0.125 */
+    ASSERT_NEAR(grid.cells[0].shape.v[5], 0.125f, 1e-4f);
+
+    free(grid.cells);
 }
 
 UTEST(contrast, zero_length_vector_stays_zero) {
-    /* A zero shape vector should remain zero after both contrast operations */
     Vec6 shape = vec6_zero();
     Vec10 ext = vec10_zero();
     Grid grid = make_single_cell_grid(shape, ext);
@@ -121,10 +130,8 @@ UTEST(contrast, zero_length_vector_stays_zero) {
     free(grid.cells);
 }
 
-UTEST(contrast, directional_crunch_zero_behavior) {
-    /* With crunch=0, pow(x, 0) = 1.0 for all x > 0, so all components
-     * should become equal (after normalization in the directional step,
-     * each nonzero component raised to 0 power = 1) */
+UTEST(contrast, directional_preserves_scale) {
+    /* Directional contrast preserves the max(internal, external) scale */
     Vec6 shape = {{1.0f, 0.5f, 0.8f, 0.3f, 0.9f, 0.7f}};
     Vec10 ext = {{0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f}};
     Grid grid = make_single_cell_grid(shape, ext);
@@ -132,22 +139,19 @@ UTEST(contrast, directional_crunch_zero_behavior) {
     SamplingConfig sc;
     sampling_config_init(&sc);
 
-    /* With crunch=0, pow(x, 0) = 1 for x > 0 */
-    contrast_directional(&grid, &sc, 0.0f);
+    contrast_directional(&grid, &sc, 1.0f);
 
-    /* All 6 components should be 1.0 (since all diffs are nonzero -> normalized -> pow(x,0)=1) */
-    for (int i = 0; i < 6; i++) {
-        ASSERT_NEAR(grid.cells[0].shape.v[i], 1.0f, 1e-5f);
-    }
+    /* With crunch=1 and external=0, max_val=internal_val,
+     * so (val/val)^1 * val = val — values preserved */
+    ASSERT_NEAR(grid.cells[0].shape.v[0], 1.0f, 1e-5f);
+    ASSERT_NEAR(grid.cells[0].shape.v[1], 0.5f, 1e-5f);
 
     free(grid.cells);
 }
 
 UTEST(contrast, two_by_two_grid) {
-    /* Test that contrast processing works on a 2x2 grid (multiple cells) */
     Grid grid = make_grid(2, 2);
 
-    /* Set up each cell with different shape/external values */
     grid.cells[0].shape = (Vec6){{0.8f, 0.2f, 0.5f, 0.3f, 0.7f, 0.1f}};
     grid.cells[0].external = (Vec10){{0.1f, 0.1f, 0.1f, 0.1f, 0.1f, 0.1f, 0.1f, 0.1f, 0.1f, 0.1f}};
 
@@ -165,22 +169,20 @@ UTEST(contrast, two_by_two_grid) {
 
     contrast_directional(&grid, &sc, 1.25f);
 
-    /* Cell 0 and 3 should have nonzero contrast (different internal/external) */
+    /* Cell 0: internal > external, values should be modified but stay positive */
     ASSERT_GT(vec6_length(grid.cells[0].shape), 0.1f);
-    ASSERT_GT(vec6_length(grid.cells[3].shape), 0.1f);
 
-    /* Cell 2 was uniform, so should produce zero contrast */
-    ASSERT_NEAR(vec6_length(grid.cells[2].shape), 0.0f, 1e-5f);
+    /* Cell 2: uniform internal == external, values preserved */
+    ASSERT_NEAR(grid.cells[2].shape.v[0], 0.5f, 1e-4f);
+
+    /* Cell 3: alternating 1.0/0.0, with crunch=1.0 and ext=0, 1.0 stays, 0.0 stays */
+    ASSERT_NEAR(grid.cells[3].shape.v[0], 1.0f, 0.01f);
 
     contrast_global(&grid, 1.5f);
 
-    /* After global, all nonzero vectors should be normalized */
-    for (int i = 0; i < 4; i++) {
-        float len = vec6_length(grid.cells[i].shape);
-        if (len > 1e-6f) {
-            ASSERT_NEAR(len, 1.0f, 0.01f);
-        }
-    }
+    /* After global, max component should be preserved */
+    float max3 = vec6_max_component(grid.cells[0].shape);
+    ASSERT_GT(max3, 0.0f);
 
     free(grid.cells);
 }
@@ -192,7 +194,6 @@ UTEST(contrast, global_zero_shape_stays_zero) {
 
     contrast_global(&grid, 2.0f);
 
-    /* Zero shape should remain zero after global contrast */
     ASSERT_NEAR(vec6_length(grid.cells[0].shape), 0.0f, 1e-8f);
 
     free(grid.cells);

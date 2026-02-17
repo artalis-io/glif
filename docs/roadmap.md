@@ -1,49 +1,75 @@
 # Glif Roadmap
 
-## Video Mode (CLI, pure C)
+## Video Mode (CLI, pure C) ✅
 
-### Decoding Strategy
-
-Don't link libavcodec. Pipe raw frames from ffmpeg — keeps glif dependency-free:
+Implemented. Pipe raw frames from ffmpeg — keeps glif dependency-free:
 
 ```bash
 ffmpeg -i movie.mp4 -f rawvideo -pix_fmt rgb24 -s 640x480 - | \
-  ./glif --video 640 480 -f fonts/SFNSMono.ttf -c
+  ./glif --video 640 480 -f fonts/SFNSMono.ttf -c --dark --fps 30
 ```
 
-### Pipeline
+### Diff-Based Rendering ✅
 
-The `--video` mode:
+`FrameDiff` renderer only emits ANSI escape codes for changed cells. Uses byte-cost estimation to adaptively choose between diff path and full redraw:
 
-1. **Init once** — font DB, sampling config, precomputed masks, lightness LUT
-2. **Read loop** — read `w * h * 3` bytes from stdin per frame
-3. **Process** — run the existing pipeline (lightness -> vectors -> contrast -> match)
-4. **Render** — ANSI output with cursor reset (`\033[H`) instead of newlines, overwrites in-place
-5. **Frame pacing** — `clock_gettime` to sleep until next frame boundary (or `--fps` flag)
+- **Diff cost**: `changed × cell_cost + jumps × 9 + 4`
+- **Full cost**: `3 + total × cell_cost + rows × 5`
 
-### Code Changes
+Picks whichever is smaller. First frame always renders all cells (prev buffer is zeroed). Subsequent identical frames emit zero bytes.
 
-Minimal — the pipeline is already stateless per-frame:
+### Re-encoding to Video via ffmpeg ✅
 
-```c
-// In main.c, new video mode
-while (fread(frame_buf, 1, frame_size, stdin) == frame_size) {
-    img.pixels = frame_buf;  // Reuse Image struct, swap pixel pointer
+`--pipe-ppm` writes raw PPM frames to stdout for ffmpeg to consume:
 
-    lightness_map_create(&lm, &img);              // 0.33ms
-    grid_compute_vectors_fast(&grid, &lm, &pm);   // 0.41ms
-    grid_compute_colors(&grid, &img);
-    contrast_directional(&grid, &sc, cfg.dir_crunch);
-    contrast_global(&grid, cfg.global_crunch);
-    match_grid(&grid, &db);
-
-    printf("\033[H");  // cursor home — overwrite previous frame
-    output_ansi(&grid);
-
-    lightness_map_free(&lm);
-    // grid cells reused — just overwrite vectors/chars each frame
-}
+```bash
+ffmpeg -i input.mp4 -f rawvideo -pix_fmt rgb24 -s 640x480 - 2>/dev/null | \
+  ./glif --video 640 480 -f fonts/SFNSMono.ttf --pipe-ppm --dark -s 2 | \
+  ffmpeg -f image2pipe -framerate 30 -i - -c:v libx264 -pix_fmt yuv420p output.mp4
 ```
+
+### `.glif` Binary Format ✅
+
+Compact per-frame capture for offline storage and WebGL replay. `--output-glif <path>` in video mode.
+
+```
+Header (24 bytes, little-endian):
+  Offset  Size  Field
+  0       4     magic:    "GLIF"
+  4       1     version:  uint8    (currently 1)
+  5       1     flags:    uint8    (bit 0: dark_mode)
+  6       2     cols:     uint16
+  8       2     rows:     uint16
+  10      2     cell_w:   uint16
+  12      2     cell_h:   uint16
+  14      4     fps:      float32
+  18      4     frames:   uint32   (written on finish)
+  22      2     reserved: uint16   (zero)
+
+Per frame (cols × rows × 4 bytes):
+  [ch, r, g, b] per cell
+```
+
+At 120×40 = 4,800 cells × 4 bytes = **19.2 KB/frame**. At 30 fps: ~576 KB/s, ~34 MB/min. Gzip compresses ~40% further. Trivially streamable.
+
+Can run alongside terminal output (`--output-glif capture.glif -c --dark`).
+
+#### Future: delta compression
+
+Flag byte + only changed cells could shrink this significantly for typical video content.
+
+### Measured Performance
+
+| Metric | Value |
+|--------|-------|
+| Pipeline (lightness + vectors + contrast + match) | ~1.0 ms/frame |
+| Render (diff-based ANSI) | ~0.17 ms/frame |
+| Terminal parsing (bottleneck) | ~35 ms/frame |
+| PPM pipe render | ~18 ms/frame |
+
+The terminal is 95% of frame time. Diff rendering minimizes bytes sent but terminal emulator parsing speed is the hard limit.
+
+---
 
 ## WASM + Webcam
 
@@ -135,6 +161,8 @@ function frame() {
 
 New file: `src/wasm_api.c` (~100 lines) wrapping the pipeline in exported functions.
 
+---
+
 ## GPU / Shader Considerations
 
 ### Why NOT shaders for the computation pipeline
@@ -194,49 +222,7 @@ void main() {
 
 CPU does the computation (small irregular workload with branching and lookup tables). GPU does the rendering (millions of pixels with a font atlas). Interface between them is ~20KB/frame.
 
-## Video Mode Optimizations
-
-### Diff-Based Rendering
-
-The current renderer emits ANSI escape codes for every cell every frame. For slow-panning or mostly-static video, 80%+ of cells are unchanged between frames. A diff-based renderer would:
-
-1. Keep previous frame's grid in memory
-2. Compare each cell (char + r + g + b) against the previous frame
-3. Only emit ANSI codes for changed cells, using cursor positioning (`\033[row;colH`) to skip unchanged regions
-
-This drastically reduces bytes sent to the terminal — the real bottleneck in video mode.
-
-### `.glif` Binary Format
-
-Compact per-frame storage for offline capture and WebGL replay:
-
-```
-Header (16 bytes):
-  magic:  "GLIF"    (4 bytes)
-  cols:   uint16    (2)
-  rows:   uint16    (2)
-  fps:    float32   (4)
-  frames: uint32    (4)
-
-Per frame (cols × rows × 4 bytes):
-  [ch, r, g, b] per cell
-```
-
-At 120×40 = 4,800 cells × 4 bytes = **19.2 KB/frame**. At 30 fps: ~576 KB/s, ~34 MB/min. Trivially streamable. A WebGL renderer reads the grid per frame and draws instanced glyphs from a font atlas.
-
-Delta compression (flag byte + only changed cells) could shrink this significantly for typical video content.
-
-### Re-encoding to Video via ffmpeg
-
-Add a `--pipe-ppm` flag that writes raw PPM frames to stdout instead of ANSI terminal output. Each frame gets the full font-rendered glyph treatment from the existing PPM path:
-
-```bash
-ffmpeg -i input.mp4 -f rawvideo -pix_fmt rgb24 -s 640x480 - 2>/dev/null | \
-  ./glif --video 640 480 -f fonts/SFNSMono.ttf --pipe-ppm | \
-  ffmpeg -f image2pipe -framerate 30 -i - -c:v libx264 -pix_fmt yuv420p output.mp4
-```
-
-This produces a real video file where each frame is a pixel-perfect ASCII art render — shareable on YouTube, social media, etc.
+---
 
 ## Expected Performance
 
