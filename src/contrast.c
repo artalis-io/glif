@@ -3,6 +3,11 @@
 #include <stdlib.h>
 #include <string.h>
 
+#if defined(__EMSCRIPTEN__) && defined(__wasm_simd128__)
+#include <wasm_simd128.h>
+#define USE_WASM_SIMD 1
+#endif
+
 static float smoothstep(float edge0, float edge1, float x) {
     float t = (x - edge0) / (edge1 - edge0);
     if (t < 0.0f) t = 0.0f;
@@ -15,9 +20,25 @@ static float cell_luminance(const GridCell *cell) {
            / 255.0f;
 }
 
-static int float_cmp(const void *a, const void *b) {
-    float fa = *(const float *)a, fb = *(const float *)b;
-    return (fa > fb) - (fa < fb);
+/* Quickselect: find k-th smallest element in arr[0..n-1]. Modifies arr. */
+static float quickselect(float *arr, int n, int k) {
+    int lo = 0, hi = n - 1;
+    while (lo < hi) {
+        float pivot = arr[lo + (hi - lo) / 2];
+        int i = lo, j = hi;
+        while (i <= j) {
+            while (arr[i] < pivot) i++;
+            while (arr[j] > pivot) j--;
+            if (i <= j) {
+                float tmp = arr[i]; arr[i] = arr[j]; arr[j] = tmp;
+                i++; j--;
+            }
+        }
+        if (k <= j) hi = j;
+        else if (k >= i) lo = i;
+        else break;
+    }
+    return arr[k];
 }
 
 void contrast_analyze_frame(AdaptiveContrast *ac, const Grid *grid) {
@@ -30,15 +51,22 @@ void contrast_analyze_frame(AdaptiveContrast *ac, const Grid *grid) {
     if (!lums) return;
 
     float sum = 0.0f;
+    const GridCell *cells = grid->cells;
+
+#ifdef _OPENMP
+    #pragma omp parallel for reduction(+:sum) schedule(static)
+#endif
     for (int i = 0; i < n; i++) {
-        lums[i] = cell_luminance(&grid->cells[i]);
-        sum += lums[i];
+        float l = cell_luminance(&cells[i]);
+        lums[i] = l;
+        sum += l;
     }
     ac->frame_avg = sum / (float)n;
 
-    qsort(lums, (size_t)n, sizeof(float), float_cmp);
-    ac->frame_p10 = lums[n / 10];
-    ac->frame_p90 = lums[n - 1 - n / 10];
+    /* Quickselect is O(n) vs qsort's O(n log n) for percentiles.
+     * Find p10 first (partially partitions), then p90. */
+    ac->frame_p10 = quickselect(lums, n, n / 10);
+    ac->frame_p90 = quickselect(lums, n, n - 1 - n / 10);
 
     free(lums);
 }

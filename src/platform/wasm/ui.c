@@ -49,14 +49,17 @@ static const char *vp_frag_src =
     "uniform vec2 u_atlasGrid;\n"
     "uniform vec2 u_cellSize;\n"
     "uniform vec2 u_resolution;\n"
+    "uniform vec2 u_offset;\n"
     "void main() {\n"
     "    vec2 fragCoord = vec2(gl_FragCoord.x, u_resolution.y - gl_FragCoord.y);\n"
-    "    vec2 cellCoord = floor(fragCoord / u_cellSize);\n"
-    "    cellCoord = clamp(cellCoord, vec2(0.0), u_gridSize - 1.0);\n"
+    "    vec2 gridCoord = fragCoord - u_offset;\n"
+    "    vec2 cellCoord = floor(gridCoord / u_cellSize);\n"
+    "    if (cellCoord.x < 0.0 || cellCoord.y < 0.0 ||\n"
+    "        cellCoord.x >= u_gridSize.x || cellCoord.y >= u_gridSize.y) discard;\n"
     "    vec2 cellUV = (cellCoord + 0.5) / u_gridSize;\n"
     "    float charIdx = texture2D(u_charGrid, cellUV).r * 255.0;\n"
     "    vec3 color = texture2D(u_colorGrid, cellUV).rgb;\n"
-    "    vec2 inCell = fract(fragCoord / u_cellSize);\n"
+    "    vec2 inCell = fract(gridCoord / u_cellSize);\n"
     "    float col = mod(charIdx, u_atlasGrid.x);\n"
     "    float row = floor(charIdx / u_atlasGrid.x);\n"
     "    vec2 atlasUV = (vec2(col, row) + inCell) / u_atlasGrid;\n"
@@ -124,11 +127,27 @@ static struct {
     int pending_w, pending_h, pending_channels;
     int pending_dirty;
 
+    /* Resolution mode */
+    int hi_res; /* 0 = ~120x40, 1 = ~240x80 (4x chars) */
+
     /* Previous parameter values for change detection */
-    int prev_cell_w, prev_cell_h;
     float prev_dir_crunch, prev_global_crunch;
     int prev_adaptive_on;
+    int prev_hi_res;
 } app;
+
+/* Compute cell dimensions from image size and resolution mode.
+ * Lo targets ~120 columns, Hi targets ~240 columns (4x char count). */
+static void compute_cell_size(int img_w, int img_h, int hi_res,
+                              int *out_cw, int *out_ch) {
+    (void)img_h;
+    int target_cols = hi_res ? 240 : 120;
+    int cw = img_w / target_cols;
+    if (cw < 2) cw = 2;
+    int ch = cw * 2;
+    *out_cw = cw;
+    *out_ch = ch;
+}
 
 /* ── Viewport shader helpers ── */
 
@@ -280,6 +299,20 @@ static void vp_render(const Grid *grid, Clay_BoundingBox bounds) {
     int vp_w = (int)(bounds.width * app.dpr);
     int vp_h = (int)(bounds.height * app.dpr);
 
+    /* Aspect-preserving fit: scale grid to fill viewport */
+    float grid_px_w = (float)cols * (float)app.atlas_cell_w;
+    float grid_px_h = (float)rows * (float)app.atlas_cell_h;
+    float scale_x = (float)vp_w / grid_px_w;
+    float scale_y = (float)vp_h / grid_px_h;
+    float scale = (scale_x < scale_y) ? scale_x : scale_y;
+
+    float render_cell_w = (float)app.atlas_cell_w * scale;
+    float render_cell_h = (float)app.atlas_cell_h * scale;
+    float render_w = (float)cols * render_cell_w;
+    float render_h = (float)rows * render_cell_h;
+    float offset_x = ((float)vp_w - render_w) * 0.5f;
+    float offset_y = ((float)vp_h - render_h) * 0.5f;
+
     glEnable(GL_SCISSOR_TEST);
     glScissor(vp_x, vp_y, vp_w, vp_h);
     glViewport(vp_x, vp_y, vp_w, vp_h);
@@ -310,9 +343,11 @@ static void vp_render(const Grid *grid, Clay_BoundingBox bounds) {
     glUniform2f(glGetUniformLocation(app.vp_program, "u_atlasGrid"),
                 (float)ATLAS_GRID_X, (float)ATLAS_GRID_Y);
     glUniform2f(glGetUniformLocation(app.vp_program, "u_cellSize"),
-                (float)app.atlas_cell_w, (float)app.atlas_cell_h);
+                render_cell_w, render_cell_h);
     glUniform2f(glGetUniformLocation(app.vp_program, "u_resolution"),
                 (float)vp_w, (float)vp_h);
+    glUniform2f(glGetUniformLocation(app.vp_program, "u_offset"),
+                offset_x, offset_y);
 
     glDrawArrays(GL_TRIANGLES, 0, 6);
 
@@ -451,11 +486,10 @@ void app_init(float dpr, int canvas_w, int canvas_h) {
         rebuild_pipeline();
 
     /* Init change-detection state */
-    app.prev_cell_w = app.cell_w;
-    app.prev_cell_h = app.cell_h;
     app.prev_dir_crunch = app.dir_crunch;
     app.prev_global_crunch = app.global_crunch;
     app.prev_adaptive_on = app.adaptive_on;
+    app.prev_hi_res = app.hi_res;
 
     app.initialized = 1;
 }
@@ -534,27 +568,25 @@ void app_frame(void) {
             if (layout.is_mobile) {
                 /* Mobile: stacked rows */
                 nk_layout_row_dynamic(&app.nk, 24, 2);
-                nk_property_int(&app.nk, "Cell W", 2, &app.cell_w, 100, 1, 0.5f);
-                nk_property_int(&app.nk, "Cell H", 2, &app.cell_h, 100, 1, 0.5f);
+                nk_property_float(&app.nk, "Edge", 0.0f, &app.dir_crunch, 10.0f, 0.05f, 0.05f);
+                nk_property_float(&app.nk, "Contrast", 0.0f, &app.global_crunch, 10.0f, 0.05f, 0.05f);
 
-                nk_layout_row_dynamic(&app.nk, 24, 2);
-                nk_property_float(&app.nk, "Dir", 0.0f, &app.dir_crunch, 10.0f, 0.05f, 0.05f);
-                nk_property_float(&app.nk, "Glb", 0.0f, &app.global_crunch, 10.0f, 0.05f, 0.05f);
-
-                nk_layout_row_dynamic(&app.nk, 28, 2);
+                nk_layout_row_dynamic(&app.nk, 28, 3);
                 nk_checkbox_label(&app.nk, "Adaptive", &app.adaptive_on);
+                if (nk_button_label(&app.nk, app.hi_res ? "Hi Res" : "Lo Res"))
+                    app.hi_res = !app.hi_res;
 #ifdef __EMSCRIPTEN__
                 if (nk_button_label(&app.nk, "Camera"))
                     EM_ASM({ if (window.glifToggleCamera) window.glifToggleCamera(); });
 #endif
             } else {
-                /* Desktop: single row, auto-sized to toolbar width */
-                nk_layout_row_dynamic(&app.nk, 28, 6);
-                nk_property_int(&app.nk, "Cell W", 2, &app.cell_w, 100, 1, 0.5f);
-                nk_property_int(&app.nk, "Cell H", 2, &app.cell_h, 100, 1, 0.5f);
-                nk_property_float(&app.nk, "Dir", 0.0f, &app.dir_crunch, 10.0f, 0.05f, 0.05f);
-                nk_property_float(&app.nk, "Glb", 0.0f, &app.global_crunch, 10.0f, 0.05f, 0.05f);
+                /* Desktop: single row */
+                nk_layout_row_dynamic(&app.nk, 28, 5);
+                nk_property_float(&app.nk, "Edge", 0.0f, &app.dir_crunch, 10.0f, 0.05f, 0.05f);
+                nk_property_float(&app.nk, "Contrast", 0.0f, &app.global_crunch, 10.0f, 0.05f, 0.05f);
                 nk_checkbox_label(&app.nk, "Adaptive", &app.adaptive_on);
+                if (nk_button_label(&app.nk, app.hi_res ? "Hi Res" : "Lo Res"))
+                    app.hi_res = !app.hi_res;
 
 #ifdef __EMSCRIPTEN__
                 if (nk_button_label(&app.nk, "Webcam"))
@@ -568,16 +600,18 @@ void app_frame(void) {
     }
 
     /* Detect parameter changes and rebuild/reprocess as needed */
-    if (app.cell_w != app.prev_cell_w || app.cell_h != app.prev_cell_h) {
-        /* Cell dimensions changed — rebuild char DB + font atlas + invalidate masks */
-        if (app.pm_stride != 0) {
-            sampling_precompute_free(&app.pm);
-            app.pm_stride = 0;
+    if (app.hi_res != app.prev_hi_res) {
+        app.prev_hi_res = app.hi_res;
+        if (app.pending_pixels) {
+            compute_cell_size(app.pending_w, app.pending_h, app.hi_res,
+                              &app.cell_w, &app.cell_h);
+            if (app.pm_stride != 0) {
+                sampling_precompute_free(&app.pm);
+                app.pm_stride = 0;
+            }
+            rebuild_pipeline();
+            app.pending_dirty = 1;
         }
-        rebuild_pipeline();
-        app.prev_cell_w = app.cell_w;
-        app.prev_cell_h = app.cell_h;
-        if (app.pending_pixels) app.pending_dirty = 1;
     }
     if (app.dir_crunch != app.prev_dir_crunch ||
         app.global_crunch != app.prev_global_crunch ||
@@ -651,6 +685,20 @@ void app_load_image(const uint8_t *data, int w, int h, int channels) {
     app.pending_w = w;
     app.pending_h = h;
     app.pending_channels = channels;
+
+    /* Compute cell size from image dimensions and resolution mode */
+    int new_cw, new_ch;
+    compute_cell_size(w, h, app.hi_res, &new_cw, &new_ch);
+    if (new_cw != app.cell_w || new_ch != app.cell_h) {
+        app.cell_w = new_cw;
+        app.cell_h = new_ch;
+        if (app.pm_stride != 0) {
+            sampling_precompute_free(&app.pm);
+            app.pm_stride = 0;
+        }
+        rebuild_pipeline();
+    }
+
     app.pending_dirty = 1;
 }
 

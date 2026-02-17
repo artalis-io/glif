@@ -3,7 +3,7 @@
 
 #define TOOLBAR_H 48
 #define MOBILE_BREAKPOINT 600
-#define CONTROLS_H 160
+#define CONTROLS_H 120
 
 /* Forward-declared element IDs */
 static const Clay_Color bg_dark   = { 26, 26, 26, 255 };
@@ -50,15 +50,19 @@ void ui_layout_build(UiLayout *layout, int canvas_w, int canvas_h) {
                 },
                 .backgroundColor = bg_toolbar,
             }) {
-                CLAY_TEXT(CLAY_STRING("Font"), CLAY_TEXT_CONFIG({
+                CLAY_TEXT(CLAY_STRING("Edge"), CLAY_TEXT_CONFIG({
                     .fontSize = 13,
                     .textColor = text_color,
                 }));
-                CLAY_TEXT(CLAY_STRING("Cell W"), CLAY_TEXT_CONFIG({
+                CLAY_TEXT(CLAY_STRING("Contrast"), CLAY_TEXT_CONFIG({
                     .fontSize = 13,
                     .textColor = text_color,
                 }));
-                CLAY_TEXT(CLAY_STRING("Cell H"), CLAY_TEXT_CONFIG({
+                CLAY_TEXT(CLAY_STRING("Adaptive"), CLAY_TEXT_CONFIG({
+                    .fontSize = 13,
+                    .textColor = text_color,
+                }));
+                CLAY_TEXT(CLAY_STRING("Resolution"), CLAY_TEXT_CONFIG({
                     .fontSize = 13,
                     .textColor = text_color,
                 }));
@@ -115,19 +119,15 @@ void ui_layout_build(UiLayout *layout, int canvas_w, int canvas_h) {
                 },
                 .backgroundColor = bg_toolbar,
             }) {
-                CLAY_TEXT(CLAY_STRING("Cell W / H"), CLAY_TEXT_CONFIG({
+                CLAY_TEXT(CLAY_STRING("Edge / Contrast"), CLAY_TEXT_CONFIG({
                     .fontSize = 13,
                     .textColor = text_color,
                 }));
-                CLAY_TEXT(CLAY_STRING("Dir / Global"), CLAY_TEXT_CONFIG({
+                CLAY_TEXT(CLAY_STRING("Adaptive / Res"), CLAY_TEXT_CONFIG({
                     .fontSize = 13,
                     .textColor = text_color,
                 }));
                 CLAY_TEXT(CLAY_STRING("Camera"), CLAY_TEXT_CONFIG({
-                    .fontSize = 13,
-                    .textColor = text_color,
-                }));
-                CLAY_TEXT(CLAY_STRING("Load Font"), CLAY_TEXT_CONFIG({
                     .fontSize = 13,
                     .textColor = text_color,
                 }));
