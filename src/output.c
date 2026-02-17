@@ -250,3 +250,83 @@ int output_ppm(const Grid *grid, const CharDatabase *db,
     if (written != expected) return -1;
     return 0;
 }
+
+int ppm_pipe_init(PpmPipe *pp, const Grid *grid, const CharDatabase *db,
+                  int scale, int dark_mode) {
+    if (scale < 1) scale = 1;
+    if (scale > 64) scale = 64;
+    pp->scale = scale;
+    pp->dark_mode = dark_mode;
+    pp->rw = grid->cell_w * scale;
+    pp->rh = grid->cell_h * scale;
+    pp->img_w = (size_t)grid->cols * (size_t)pp->rw;
+    pp->img_h = (size_t)grid->rows * (size_t)pp->rh;
+
+    pp->pixels = malloc(pp->img_w * pp->img_h * 3);
+    if (!pp->pixels) return -1;
+
+    pp->render_bmps = NULL;
+    if (scale > 1) {
+        pp->render_bmps = char_db_render_bitmaps(db, scale);
+        if (!pp->render_bmps) { free(pp->pixels); pp->pixels = NULL; return -1; }
+    }
+    return 0;
+}
+
+void ppm_pipe_frame(PpmPipe *pp, const Grid *grid, const CharDatabase *db) {
+    int rw = pp->rw, rh = pp->rh;
+    size_t img_w = pp->img_w;
+    int dark_mode = pp->dark_mode;
+    uint8_t *pixels = pp->pixels;
+
+    for (int r = 0; r < grid->rows; r++) {
+        for (int c = 0; c < grid->cols; c++) {
+            const GridCell *cell = &grid->cells[r * grid->cols + c];
+            int char_idx = cell->ch - CHAR_FIRST;
+            if (char_idx < 0 || char_idx >= CHAR_COUNT) char_idx = 0;
+
+            const uint8_t *bmp;
+            int bw, bh;
+            if (pp->render_bmps) {
+                bmp = pp->render_bmps[char_idx];
+                bw = rw; bh = rh;
+            } else {
+                bmp = db->entries[char_idx].bitmap;
+                bw = grid->cell_w; bh = grid->cell_h;
+            }
+
+            int ox = c * rw, oy = r * rh;
+            for (int y = 0; y < bh; y++) {
+                uint8_t *row = pixels + ((size_t)(oy + y) * img_w + (size_t)ox) * 3;
+                for (int x = 0; x < bw; x++) {
+                    float alpha = bmp ? bmp[y * bw + x] / 255.0f : 0.0f;
+                    if (dark_mode) {
+                        row[0] = (uint8_t)(cell->r * alpha);
+                        row[1] = (uint8_t)(cell->g * alpha);
+                        row[2] = (uint8_t)(cell->b * alpha);
+                    } else {
+                        row[0] = (uint8_t)(cell->r + (255 - cell->r) * alpha);
+                        row[1] = (uint8_t)(cell->g + (255 - cell->g) * alpha);
+                        row[2] = (uint8_t)(cell->b + (255 - cell->b) * alpha);
+                    }
+                    row += 3;
+                }
+            }
+        }
+    }
+
+    /* Write PPM header + pixels to stdout */
+    fprintf(stdout, "P6\n%zu %zu\n255\n", pp->img_w, pp->img_h);
+    fwrite(pixels, 1, pp->img_w * pp->img_h * 3, stdout);
+    fflush(stdout);
+}
+
+void ppm_pipe_free(PpmPipe *pp) {
+    free(pp->pixels);
+    if (pp->render_bmps) {
+        for (int i = 0; i < CHAR_COUNT; i++) free(pp->render_bmps[i]);
+        free(pp->render_bmps);
+    }
+    pp->pixels = NULL;
+    pp->render_bmps = NULL;
+}

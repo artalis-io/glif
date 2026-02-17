@@ -33,4 +33,20 @@ void frame_diff_free(FrameDiff *fd);
 int output_ppm(const Grid *grid, const CharDatabase *db,
                const char *path, int scale, int dark_mode);
 
+/* Streaming PPM renderer for video mode — writes PPM frames to stdout.
+ * Reuses allocated buffers across frames. */
+typedef struct {
+    uint8_t *pixels;      /* output pixel buffer */
+    uint8_t **render_bmps; /* scaled glyph bitmaps (NULL if scale==1) */
+    size_t img_w, img_h;  /* output image dimensions */
+    int rw, rh;           /* render cell dimensions */
+    int scale;
+    int dark_mode;
+} PpmPipe;
+
+int ppm_pipe_init(PpmPipe *pp, const Grid *grid, const CharDatabase *db,
+                  int scale, int dark_mode);
+void ppm_pipe_frame(PpmPipe *pp, const Grid *grid, const CharDatabase *db);
+void ppm_pipe_free(PpmPipe *pp);
+
 #endif

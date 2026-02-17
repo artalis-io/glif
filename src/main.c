@@ -28,6 +28,7 @@ typedef struct {
     int video_w;   /* video frame width */
     int video_h;   /* video frame height */
     float fps;     /* target fps (0 = unlimited) */
+    int pipe_ppm;  /* video: write PPM frames to stdout instead of ANSI */
 } Config;
 
 static void usage(const char *prog) {
@@ -48,6 +49,7 @@ static void usage(const char *prog) {
         "  --dark                   PPM: black bg + colored glyphs\n"
         "  --video <W> <H>          Video mode: read raw RGB24 frames from stdin\n"
         "  --fps <n>                Target framerate for video mode (default: 30)\n"
+        "  --pipe-ppm               Video: write PPM frames to stdout (for ffmpeg)\n"
         "  --help                   Show this message\n",
         prog, prog);
 }
@@ -68,6 +70,7 @@ static int parse_args(Config *cfg, int argc, char **argv) {
     cfg->video_w = 0;
     cfg->video_h = 0;
     cfg->fps = 30.0f;
+    cfg->pipe_ppm = 0;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--help") == 0) {
@@ -132,6 +135,8 @@ static int parse_args(Config *cfg, int argc, char **argv) {
             cfg->fps = val;
         } else if (strcmp(argv[i], "--dark") == 0) {
             cfg->dark_mode = 1;
+        } else if (strcmp(argv[i], "--pipe-ppm") == 0) {
+            cfg->pipe_ppm = 1;
         } else if (strcmp(argv[i], "-a") == 0 || strcmp(argv[i], "--auto-fit") == 0) {
             cfg->auto_fit = 1;
         } else if (strcmp(argv[i], "-c") == 0 || strcmp(argv[i], "--color") == 0) {
@@ -345,9 +350,20 @@ static int run_video(Config *cfg) {
     int cols = grid.cols;
     int rows = grid.rows;
 
-    /* Init diff renderer for color mode */
+    /* Init renderers */
     FrameDiff fd = {0};
-    if (cfg->color) {
+    PpmPipe pp = {0};
+    if (cfg->pipe_ppm) {
+        if (ppm_pipe_init(&pp, &grid, &db, cfg->scale, cfg->dark_mode) != 0) {
+            fprintf(stderr, "error: failed to allocate PPM pipe buffer\n");
+            free(lm.data);
+            grid_free(&grid);
+            free(frame_buf);
+            char_db_free(&db);
+            sampling_precompute_free(&pm);
+            return 1;
+        }
+    } else if (cfg->color) {
         if (frame_diff_init(&fd, rows, cols) != 0) {
             fprintf(stderr, "error: failed to allocate diff buffer\n");
             free(lm.data);
@@ -359,11 +375,13 @@ static int run_video(Config *cfg) {
         }
     }
 
-    /* Hide cursor, clear screen */
     fprintf(stderr, "Video: %dx%d @ %.0f fps, grid %dx%d (%d cells)\n",
             w, h, cfg->fps, cols, rows, cols * rows);
-    printf("\033[?25l\033[2J");  /* hide cursor, clear screen */
-    fflush(stdout);
+    if (!cfg->pipe_ppm) {
+        /* Hide cursor, clear screen (not for PPM pipe — stdout is binary) */
+        printf("\033[?25l\033[2J");
+        fflush(stdout);
+    }
 
     long frames = 0;
     double t_start = time_now();
@@ -387,7 +405,9 @@ static int run_video(Config *cfg) {
         t_pipeline_total += t_render_start - t_frame_start;
 
         /* Render */
-        if (cfg->color) {
+        if (cfg->pipe_ppm) {
+            ppm_pipe_frame(&pp, &grid, &db);
+        } else if (cfg->color) {
             frame_diff_render(&fd, &grid, cfg->dark_mode);
         } else {
             printf("\033[H");
@@ -413,9 +433,11 @@ static int run_video(Config *cfg) {
 
     double t_total = time_now() - t_start;
 
-    /* Show cursor, reset colors */
-    printf("\033[?25h\033[0m");
-    fflush(stdout);
+    /* Show cursor, reset colors (not for PPM pipe) */
+    if (!cfg->pipe_ppm) {
+        printf("\033[?25h\033[0m");
+        fflush(stdout);
+    }
 
     if (frames > 0) {
         fprintf(stderr, "Played %ld frames in %.1fs (%.1f fps avg)\n",
@@ -426,6 +448,7 @@ static int run_video(Config *cfg) {
     }
 
     /* Cleanup */
+    ppm_pipe_free(&pp);
     frame_diff_free(&fd);
     free(lm.data);
     lm.data = NULL;

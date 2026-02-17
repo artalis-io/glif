@@ -293,4 +293,348 @@ UTEST(output, ppm_invalid_path_fails) {
     char_db_free(&db);
 }
 
+/* ---- FrameDiff tests ---- */
+
+UTEST(output, frame_diff_init_and_free) {
+    FrameDiff fd;
+    int ret = frame_diff_init(&fd, 10, 20);
+    ASSERT_EQ(ret, 0);
+    ASSERT_TRUE(fd.buf != NULL);
+    ASSERT_TRUE(fd.prev != NULL);
+    ASSERT_EQ(fd.cells, 200);
+    ASSERT_EQ(fd.cols, 20);
+    frame_diff_free(&fd);
+    ASSERT_TRUE(fd.buf == NULL);
+    ASSERT_TRUE(fd.prev == NULL);
+}
+
+UTEST(output, frame_diff_first_frame_renders_all_cells) {
+    /* First frame: prev is zeroed, all cells differ → output should contain
+     * every cell's character and color. */
+    Grid grid = make_test_grid(3, 4, 10, 20, 'A');
+    FrameDiff fd;
+    ASSERT_EQ(frame_diff_init(&fd, 3, 4), 0);
+
+    const char *path = "/tmp/glif_test_diff_first.txt";
+    fflush(stdout);
+    int saved_fd = dup(STDOUT_FILENO);
+    int file_fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    dup2(file_fd, STDOUT_FILENO);
+    close(file_fd);
+
+    frame_diff_render(&fd, &grid, 1);
+
+    fflush(stdout);
+    dup2(saved_fd, STDOUT_FILENO);
+    close(saved_fd);
+
+    FILE *f = fopen(path, "rb");
+    ASSERT_TRUE(f != NULL);
+    fseek(f, 0, SEEK_END);
+    long size = ftell(f);
+    fclose(f);
+
+    /* Should have substantial output (12 cells × ~22 bytes each) */
+    ASSERT_GT(size, 200);
+
+    /* After first frame, prev should be populated → identical frame = no output */
+    const char *path2 = "/tmp/glif_test_diff_first2.txt";
+    fflush(stdout);
+    saved_fd = dup(STDOUT_FILENO);
+    file_fd = open(path2, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    dup2(file_fd, STDOUT_FILENO);
+    close(file_fd);
+    frame_diff_render(&fd, &grid, 1);
+    fflush(stdout);
+    dup2(saved_fd, STDOUT_FILENO);
+    close(saved_fd);
+
+    f = fopen(path2, "rb");
+    ASSERT_TRUE(f != NULL);
+    fseek(f, 0, SEEK_END);
+    long size2 = ftell(f);
+    fclose(f);
+    ASSERT_EQ(size2, 0);  /* no changes → no output */
+
+    remove(path);
+    remove(path2);
+    frame_diff_free(&fd);
+    free(grid.cells);
+}
+
+UTEST(output, frame_diff_identical_frame_no_output) {
+    /* Render once, then render the exact same grid → should produce no output */
+    Grid grid = make_test_grid(2, 3, 10, 20, 'B');
+    FrameDiff fd;
+    ASSERT_EQ(frame_diff_init(&fd, 2, 3), 0);
+
+    /* First render — populates prev */
+    fflush(stdout);
+    int saved_fd = dup(STDOUT_FILENO);
+    int file_fd = open("/dev/null", O_WRONLY);
+    dup2(file_fd, STDOUT_FILENO);
+    close(file_fd);
+    frame_diff_render(&fd, &grid, 1);
+    fflush(stdout);
+    dup2(saved_fd, STDOUT_FILENO);
+    close(saved_fd);
+
+    /* Second render — capture output */
+    const char *path = "/tmp/glif_test_diff_nochange.txt";
+    fflush(stdout);
+    saved_fd = dup(STDOUT_FILENO);
+    file_fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    dup2(file_fd, STDOUT_FILENO);
+    close(file_fd);
+    frame_diff_render(&fd, &grid, 0);
+    fflush(stdout);
+    dup2(saved_fd, STDOUT_FILENO);
+    close(saved_fd);
+
+    /* File should be empty — nothing changed */
+    FILE *f = fopen(path, "rb");
+    ASSERT_TRUE(f != NULL);
+    fseek(f, 0, SEEK_END);
+    long size = ftell(f);
+    fclose(f);
+    ASSERT_EQ(size, 0);
+
+    remove(path);
+    frame_diff_free(&fd);
+    free(grid.cells);
+}
+
+UTEST(output, frame_diff_single_cell_change_uses_cursor_move) {
+    /* Render once, change one cell, render again → output should contain \033[r;cH */
+    Grid grid = make_test_grid(3, 4, 10, 20, 'C');
+    FrameDiff fd;
+    ASSERT_EQ(frame_diff_init(&fd, 3, 4), 0);
+
+    /* First render */
+    fflush(stdout);
+    int saved_fd = dup(STDOUT_FILENO);
+    int file_fd = open("/dev/null", O_WRONLY);
+    dup2(file_fd, STDOUT_FILENO);
+    close(file_fd);
+    frame_diff_render(&fd, &grid, 1);
+    fflush(stdout);
+    dup2(saved_fd, STDOUT_FILENO);
+    close(saved_fd);
+
+    /* Change one cell at row 1, col 2 */
+    grid.cells[1 * 4 + 2].ch = 'Z';
+    grid.cells[1 * 4 + 2].r = 255;
+
+    /* Second render — capture */
+    const char *path = "/tmp/glif_test_diff_single.txt";
+    fflush(stdout);
+    saved_fd = dup(STDOUT_FILENO);
+    file_fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    dup2(file_fd, STDOUT_FILENO);
+    close(file_fd);
+    frame_diff_render(&fd, &grid, 1);
+    fflush(stdout);
+    dup2(saved_fd, STDOUT_FILENO);
+    close(saved_fd);
+
+    /* Should have output, and it should contain cursor positioning \033[2;3H */
+    FILE *f = fopen(path, "rb");
+    ASSERT_TRUE(f != NULL);
+    fseek(f, 0, SEEK_END);
+    long size = ftell(f);
+    fclose(f);
+    ASSERT_GT(size, 0);
+
+    /* Read content and look for the cursor position sequence */
+    f = fopen(path, "rb");
+    char *content = malloc((size_t)size);
+    fread(content, 1, (size_t)size, f);
+    fclose(f);
+
+    /* Should contain \033[2;3H (row 2, col 3, 1-indexed) */
+    int found = 0;
+    for (long i = 0; i < size - 5; i++) {
+        if (content[i] == '\033' && content[i+1] == '[' &&
+            content[i+2] == '2' && content[i+3] == ';' &&
+            content[i+4] == '3' && content[i+5] == 'H') {
+            found = 1;
+            break;
+        }
+    }
+    ASSERT_TRUE(found);
+
+    free(content);
+    remove(path);
+    frame_diff_free(&fd);
+    free(grid.cells);
+}
+
+/* ---- PpmPipe tests ---- */
+
+UTEST(output, ppm_pipe_init_and_free) {
+    SamplingConfig sc;
+    sampling_config_init(&sc);
+    CharDatabase db;
+    if (char_db_create(&db, "fonts/SFNSMono.ttf", 10, 20, &sc) != 0) return;
+
+    Grid grid = make_test_grid(3, 4, 10, 20, 'A');
+
+    PpmPipe pp;
+    int ret = ppm_pipe_init(&pp, &grid, &db, 2, 0);
+    ASSERT_EQ(ret, 0);
+    ASSERT_TRUE(pp.pixels != NULL);
+    ASSERT_TRUE(pp.render_bmps != NULL);
+    ASSERT_EQ((int)pp.img_w, 4 * 10 * 2);
+    ASSERT_EQ((int)pp.img_h, 3 * 20 * 2);
+    ASSERT_EQ(pp.rw, 20);
+    ASSERT_EQ(pp.rh, 40);
+
+    ppm_pipe_free(&pp);
+    ASSERT_TRUE(pp.pixels == NULL);
+    ASSERT_TRUE(pp.render_bmps == NULL);
+
+    free(grid.cells);
+    char_db_free(&db);
+}
+
+UTEST(output, ppm_pipe_scale1_no_render_bmps) {
+    SamplingConfig sc;
+    sampling_config_init(&sc);
+    CharDatabase db;
+    if (char_db_create(&db, "fonts/SFNSMono.ttf", 10, 20, &sc) != 0) return;
+
+    Grid grid = make_test_grid(2, 2, 10, 20, 'X');
+
+    PpmPipe pp;
+    int ret = ppm_pipe_init(&pp, &grid, &db, 1, 0);
+    ASSERT_EQ(ret, 0);
+    ASSERT_TRUE(pp.pixels != NULL);
+    ASSERT_TRUE(pp.render_bmps == NULL);  /* scale=1 uses analysis bitmaps */
+    ASSERT_EQ(pp.scale, 1);
+
+    ppm_pipe_free(&pp);
+    free(grid.cells);
+    char_db_free(&db);
+}
+
+UTEST(output, ppm_pipe_frame_writes_valid_ppm) {
+    SamplingConfig sc;
+    sampling_config_init(&sc);
+    CharDatabase db;
+    if (char_db_create(&db, "fonts/SFNSMono.ttf", 10, 20, &sc) != 0) return;
+
+    Grid grid = make_test_grid(2, 3, 10, 20, 'H');
+
+    PpmPipe pp;
+    ASSERT_EQ(ppm_pipe_init(&pp, &grid, &db, 1, 0), 0);
+
+    /* Capture stdout */
+    const char *path = "/tmp/glif_test_pipe_frame.ppm";
+    fflush(stdout);
+    int saved_fd = dup(STDOUT_FILENO);
+    int file_fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    dup2(file_fd, STDOUT_FILENO);
+    close(file_fd);
+
+    ppm_pipe_frame(&pp, &grid, &db);
+
+    fflush(stdout);
+    dup2(saved_fd, STDOUT_FILENO);
+    close(saved_fd);
+
+    /* Verify PPM header */
+    FILE *f = fopen(path, "rb");
+    ASSERT_TRUE(f != NULL);
+    char magic[3];
+    int w, h, maxval;
+    int scanned = fscanf(f, "%2s %d %d %d", magic, &w, &h, &maxval);
+    ASSERT_EQ(scanned, 4);
+    ASSERT_STREQ(magic, "P6");
+    ASSERT_EQ(w, (int)pp.img_w);
+    ASSERT_EQ(h, (int)pp.img_h);
+    ASSERT_EQ(maxval, 255);
+
+    /* Verify total file size */
+    fseek(f, 0, SEEK_END);
+    long file_size = ftell(f);
+    fclose(f);
+
+    char header_buf[64];
+    int header_len = snprintf(header_buf, sizeof(header_buf),
+                              "P6\n%d %d\n255\n", w, h);
+    long expected = header_len + (long)w * (long)h * 3;
+    ASSERT_EQ(file_size, expected);
+
+    remove(path);
+    ppm_pipe_free(&pp);
+    free(grid.cells);
+    char_db_free(&db);
+}
+
+UTEST(output, ppm_pipe_dark_vs_light_differ) {
+    SamplingConfig sc;
+    sampling_config_init(&sc);
+    CharDatabase db;
+    if (char_db_create(&db, "fonts/SFNSMono.ttf", 10, 20, &sc) != 0) return;
+
+    Grid grid = make_test_grid(2, 2, 10, 20, 'M');
+
+    /* Render dark mode */
+    PpmPipe pp_dark;
+    ASSERT_EQ(ppm_pipe_init(&pp_dark, &grid, &db, 1, 1), 0);
+
+    const char *path_dark = "/tmp/glif_test_pipe_dark.ppm";
+    fflush(stdout);
+    int saved = dup(STDOUT_FILENO);
+    int fd = open(path_dark, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    dup2(fd, STDOUT_FILENO); close(fd);
+    ppm_pipe_frame(&pp_dark, &grid, &db);
+    fflush(stdout);
+    dup2(saved, STDOUT_FILENO); close(saved);
+
+    /* Render light mode */
+    PpmPipe pp_light;
+    ASSERT_EQ(ppm_pipe_init(&pp_light, &grid, &db, 1, 0), 0);
+
+    const char *path_light = "/tmp/glif_test_pipe_light.ppm";
+    fflush(stdout);
+    saved = dup(STDOUT_FILENO);
+    fd = open(path_light, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    dup2(fd, STDOUT_FILENO); close(fd);
+    ppm_pipe_frame(&pp_light, &grid, &db);
+    fflush(stdout);
+    dup2(saved, STDOUT_FILENO); close(saved);
+
+    /* Both should be same size but different content */
+    FILE *f1 = fopen(path_dark, "rb");
+    FILE *f2 = fopen(path_light, "rb");
+    ASSERT_TRUE(f1 && f2);
+
+    fseek(f1, 0, SEEK_END); long s1 = ftell(f1);
+    fseek(f2, 0, SEEK_END); long s2 = ftell(f2);
+    ASSERT_EQ(s1, s2);
+
+    /* Read and compare — should differ */
+    rewind(f1); rewind(f2);
+    uint8_t *d1 = malloc((size_t)s1);
+    uint8_t *d2 = malloc((size_t)s2);
+    fread(d1, 1, (size_t)s1, f1);
+    fread(d2, 1, (size_t)s2, f2);
+    fclose(f1); fclose(f2);
+
+    int differ = 0;
+    for (long i = 0; i < s1; i++) {
+        if (d1[i] != d2[i]) { differ = 1; break; }
+    }
+    ASSERT_TRUE(differ);
+
+    free(d1); free(d2);
+    remove(path_dark);
+    remove(path_light);
+    ppm_pipe_free(&pp_dark);
+    ppm_pipe_free(&pp_light);
+    free(grid.cells);
+    char_db_free(&db);
+}
+
 UTEST_MAIN();
