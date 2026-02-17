@@ -489,6 +489,7 @@ void app_init(float dpr, int canvas_w, int canvas_h) {
     app.nk_font = nk_font_atlas_add_from_memory(&app.nk_atlas,
         app.font_data, (nk_size)app.font_len, 14.0f * dpr, NULL);
     nk_webgl_font_stash_end(&app.nk_gl, &app.nk_atlas);
+    app.nk_font->handle.height = 14.0f; /* logical size for layout; atlas is baked at 14*dpr */
     nk_init_default(&app.nk, &app.nk_font->handle);
 
     /* Init Clay */
@@ -527,6 +528,31 @@ void app_resize(int canvas_w, int canvas_h) {
         Clay_SetLayoutDimensions((Clay_Dimensions){
             (float)canvas_w / app.dpr, (float)canvas_h / app.dpr });
     }
+}
+
+EMSCRIPTEN_KEEPALIVE
+void app_set_dpr(float dpr) {
+    if (dpr <= 0.0f || dpr == app.dpr) return;
+    app.dpr = dpr;
+    app.nk_gl.dpr = dpr;
+
+    if (!app.font_data || app.font_len <= 0) return;
+
+    /* Delete old Nuklear font texture and re-bake at new DPR */
+    if (app.nk_gl.font_tex) {
+        glDeleteTextures(1, &app.nk_gl.font_tex);
+        app.nk_gl.font_tex = 0;
+    }
+    nk_font_atlas_clear(&app.nk_atlas);
+    nk_webgl_font_stash_begin(&app.nk_gl, &app.nk_atlas);
+    app.nk_font = nk_font_atlas_add_from_memory(&app.nk_atlas,
+        app.font_data, (nk_size)app.font_len, 14.0f * dpr, NULL);
+    nk_webgl_font_stash_end(&app.nk_gl, &app.nk_atlas);
+    app.nk_font->handle.height = 14.0f; /* logical size for layout; atlas is baked at 14*dpr */
+    nk_style_set_font(&app.nk, &app.nk_font->handle);
+
+    /* Rebuild viewport glyph atlas at new physical cell size */
+    vp_build_font_atlas();
 }
 
 EMSCRIPTEN_KEEPALIVE

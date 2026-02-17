@@ -15,6 +15,7 @@
     let videoEl = null;
     let videoStream = null;
     let videoAnimId = null;
+    let lastDpr = 0;
 
     /* ── DPR + resize ── */
 
@@ -24,12 +25,28 @@
         const h = canvas.clientHeight;
         canvas.width = Math.round(w * dpr);
         canvas.height = Math.round(h * dpr);
-        if (Module && Module._app_resize) {
-            Module._app_resize(canvas.width, canvas.height);
+        if (Module) {
+            if (dpr !== lastDpr && Module._app_set_dpr) {
+                Module._app_set_dpr(dpr);
+                lastDpr = dpr;
+            }
+            if (Module._app_resize) {
+                Module._app_resize(canvas.width, canvas.height);
+            }
         }
     }
 
     window.addEventListener('resize', resize);
+
+    /* Re-register on each DPR change (monitor switch, browser zoom) */
+    function watchDpr() {
+        var mq = window.matchMedia('(resolution: ' + window.devicePixelRatio + 'dppx)');
+        mq.addEventListener('change', function () {
+            resize();
+            watchDpr();
+        }, { once: true });
+    }
+    watchDpr();
 
     /* ── Mouse events ── */
 
@@ -247,6 +264,7 @@
     createGlifModule({ canvas: canvas }).then(function (mod) {
         Module = mod;
         const dpr = window.devicePixelRatio || 1;
+        lastDpr = dpr;
         /* Init before resize — app_resize depends on state set by app_init */
         Module._app_init(dpr, canvas.width, canvas.height);
         resize();

@@ -116,7 +116,7 @@ WASM_UI_SRC = $(CORE_SRC) \
               src/platform/wasm/ui_layout.c
 WASM_UI_OUT = web/glif.js
 
-WASM_EXPORTS = '_app_init','_app_resize','_app_frame','_app_mouse','_app_key', \
+WASM_EXPORTS = '_app_init','_app_resize','_app_set_dpr','_app_frame','_app_mouse','_app_key', \
                '_app_touch','_app_load_font','_app_load_image','_app_video_frame', \
                '_app_switch_camera','_app_get_camera_count','_malloc','_free'
 
