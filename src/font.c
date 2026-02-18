@@ -66,9 +66,11 @@ static int char_db_init_from_font(CharDatabase *db, const SamplingConfig *sc) {
     int cell_w = db->cell_w;
     int cell_h = db->cell_h;
 
+    int font_offset = stbtt_GetFontOffsetForIndex(db->font_data, 0);
+    if (font_offset < 0) return -1;
+
     stbtt_fontinfo font;
-    if (!stbtt_InitFont(&font, db->font_data,
-                        stbtt_GetFontOffsetForIndex(db->font_data, 0))) {
+    if (!stbtt_InitFont(&font, db->font_data, font_offset)) {
         return -1;
     }
 

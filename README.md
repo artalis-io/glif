@@ -163,6 +163,23 @@ The script auto-loads `v4l2loopback` if needed and uses direct v4l2 output (2 pr
 
 **macOS / Windows:** Use `--pipe-raw` piped through ffmpeg to OBS Virtual Camera. See [docs/webcam.md](docs/webcam.md) for setup on all platforms.
 
+## Chrome extension
+
+Real-time ASCII art overlay for any web video. Works on YouTube, Vimeo, Twitch, and any page with `<video>` elements.
+
+```bash
+make wasm-ext                          # build WASM for the extension
+# Load extension/  as an unpacked extension in chrome://extensions
+```
+
+Features:
+- **Video overlay** — ASCII art rendered via WebGL, positioned over the original video
+- **Webcam interception** — Overrides `getUserMedia` so Zoom/Teams/Meet transmit ASCII art to other participants
+- **SPA navigation** — Detects `pushState`/`replaceState` URL changes (YouTube, etc.) and re-attaches overlays
+- **Deferred video detection** — MutationObserver catches `<video>` elements added after page load
+- **Persistence** — Enabled state auto-restores on new tabs and page refreshes
+- **Real-time controls** — Edge/contrast sliders and hi-res toggle update immediately
+
 ## Web demo
 
 The C core compiles to WebAssembly via Emscripten. The web UI uses Nuklear for widgets, Clay for layout, and a WebGL font-atlas shader for GPU-accelerated rendering.
@@ -193,6 +210,7 @@ src/
 
   platform/wasm/
     ui.c             WASM app: init, frame loop, rendering pipeline
+    ext.c            Chrome extension WASM entry point (no UI, frame-driven)
     ui_layout.c/h    Responsive layout (desktop/tablet/mobile breakpoints)
     nk_webgl.c/h     Nuklear WebGL rendering backend
     nk_impl.c        Nuklear implementation defines
@@ -200,6 +218,18 @@ src/
 
   platform/linux/
     v4l2_output.c/h  Direct v4l2loopback output
+
+extension/              Chrome extension (Manifest V3)
+  manifest.json         Extension manifest
+  background.js         Service worker — script injection
+  content.js            Content script — popup/renderer relay
+  webcam-proxy.js       Main-world script at document_start — getUserMedia proxy
+  content-webcam-early.js  Content script at document_start for webcam
+  renderer.js           Main-world script — video overlay lifecycle
+  webcam.js             Main-world script — webcam WASM pipeline + handler
+  popup.html/js/css     Extension popup UI
+  wasm/                 WASM build output (glif-ext.js + .wasm)
+  test/                 Puppeteer smoke tests
 
 vendor/               Vendored single-header libraries (stb, Nuklear, Clay, utest.h)
 tests/                Unit tests (136 tests across 9 test files)
@@ -253,10 +283,13 @@ make tools/bench
 ## Testing
 
 ```bash
-make test    # 136 tests across 9 modules
+make test         # 136 C unit tests across 9 modules
+npm run test:ext  # Chrome extension smoke tests (requires npm install)
 ```
 
-Tests cover all pipeline stages: vector math, sampling, image loading, grid computation, contrast enhancement, character matching, output formats, and temporal smoothing. Uses [Sheredom's utest.h](https://github.com/sheredom/utest.h) framework.
+C tests cover all pipeline stages: vector math, sampling, image loading, grid computation, contrast enhancement, character matching, output formats, and temporal smoothing. Uses [Sheredom's utest.h](https://github.com/sheredom/utest.h) framework.
+
+Extension tests use Puppeteer to launch Chrome with the extension loaded, navigate to a test page with a synthetic video, and verify the full overlay lifecycle: injection, overlay creation, WebGL context, params/hi-res updates, disable/re-enable, SPA navigation (`pushState`), and `replaceState` no-op.
 
 ## Attribution
 

@@ -5,12 +5,17 @@
 #include <math.h>
 #include <stdlib.h>
 
+static const char *test_font(void) {
+    const char *env = getenv("GLIF_TEST_FONT");
+    return env ? env : "fonts/SFNSMono.ttf";
+}
+
 UTEST(font, create_succeeds_with_valid_font) {
     SamplingConfig sc;
     sampling_config_init(&sc);
 
     CharDatabase db;
-    int ret = char_db_create(&db, "fonts/SFNSMono.ttf", 10, 20, &sc);
+    int ret = char_db_create(&db, test_font(), 10, 20, &sc);
     ASSERT_EQ(ret, 0);
     ASSERT_TRUE(db.font_data != NULL);
     ASSERT_EQ(db.cell_w, 10);
@@ -51,7 +56,7 @@ UTEST(font, space_has_zero_shape_vector) {
     sampling_config_init(&sc);
 
     CharDatabase db;
-    int ret = char_db_create(&db, "fonts/SFNSMono.ttf", 10, 20, &sc);
+    int ret = char_db_create(&db, test_font(), 10, 20, &sc);
     if (ret != 0) return;
 
     /* Space is entry 0 (CHAR_FIRST = 32, space = 32) */
@@ -66,7 +71,7 @@ UTEST(font, nonspace_chars_have_nonzero_shapes) {
     sampling_config_init(&sc);
 
     CharDatabase db;
-    int ret = char_db_create(&db, "fonts/SFNSMono.ttf", 10, 20, &sc);
+    int ret = char_db_create(&db, test_font(), 10, 20, &sc);
     if (ret != 0) return;
 
     /* Common characters should have nonzero shape vectors */
@@ -93,7 +98,7 @@ UTEST(font, all_shape_vectors_component_normalized) {
     sampling_config_init(&sc);
 
     CharDatabase db;
-    int ret = char_db_create(&db, "fonts/SFNSMono.ttf", 10, 20, &sc);
+    int ret = char_db_create(&db, test_font(), 10, 20, &sc);
     if (ret != 0) return;
 
     /* Per-component max normalization: each dimension's max across all
@@ -119,7 +124,7 @@ UTEST(font, all_95_entries_populated) {
     sampling_config_init(&sc);
 
     CharDatabase db;
-    int ret = char_db_create(&db, "fonts/SFNSMono.ttf", 10, 20, &sc);
+    int ret = char_db_create(&db, test_font(), 10, 20, &sc);
     if (ret != 0) return;
 
     ASSERT_EQ(CHAR_COUNT, 95);
@@ -139,7 +144,7 @@ UTEST(font, bitmaps_allocated_for_all_entries) {
     sampling_config_init(&sc);
 
     CharDatabase db;
-    int ret = char_db_create(&db, "fonts/SFNSMono.ttf", 10, 20, &sc);
+    int ret = char_db_create(&db, test_font(), 10, 20, &sc);
     if (ret != 0) return;
 
     for (int i = 0; i < CHAR_COUNT; i++) {
@@ -154,7 +159,7 @@ UTEST(font, render_bitmaps_valid_scale) {
     sampling_config_init(&sc);
 
     CharDatabase db;
-    int ret = char_db_create(&db, "fonts/SFNSMono.ttf", 10, 20, &sc);
+    int ret = char_db_create(&db, test_font(), 10, 20, &sc);
     if (ret != 0) return;
 
     uint8_t **bitmaps = char_db_render_bitmaps(&db, 2);
@@ -177,7 +182,7 @@ UTEST(font, render_bitmaps_scale1_vs_scale2_differ) {
     sampling_config_init(&sc);
 
     CharDatabase db;
-    int ret = char_db_create(&db, "fonts/SFNSMono.ttf", 10, 20, &sc);
+    int ret = char_db_create(&db, test_font(), 10, 20, &sc);
     if (ret != 0) return;
 
     uint8_t **bmp1 = char_db_render_bitmaps(&db, 1);
@@ -205,7 +210,7 @@ UTEST(font, space_bitmap_is_blank) {
     sampling_config_init(&sc);
 
     CharDatabase db;
-    int ret = char_db_create(&db, "fonts/SFNSMono.ttf", 10, 20, &sc);
+    int ret = char_db_create(&db, test_font(), 10, 20, &sc);
     if (ret != 0) return;
 
     /* Space is entry 0, its bitmap should be all zeros */
@@ -227,7 +232,7 @@ UTEST(font, char_db_free_nullifies) {
     sampling_config_init(&sc);
 
     CharDatabase db;
-    int ret = char_db_create(&db, "fonts/SFNSMono.ttf", 10, 20, &sc);
+    int ret = char_db_create(&db, test_font(), 10, 20, &sc);
     if (ret != 0) return;
 
     char_db_free(&db);

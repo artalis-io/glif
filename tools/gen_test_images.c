@@ -14,7 +14,8 @@
 #define H 240
 
 static void write_gradient(const char *path) {
-    unsigned char *px = malloc(W * H * 3);
+    unsigned char *px = calloc((size_t)W * H, 3);
+    if (!px) { fprintf(stderr, "alloc failed\n"); return; }
     for (int y = 0; y < H; y++) {
         for (int x = 0; x < W; x++) {
             int i = (y * W + x) * 3;
@@ -29,7 +30,8 @@ static void write_gradient(const char *path) {
 }
 
 static void write_checkerboard(const char *path) {
-    unsigned char *px = malloc(W * H * 3);
+    unsigned char *px = calloc((size_t)W * H, 3);
+    if (!px) { fprintf(stderr, "alloc failed\n"); return; }
     int sq = 20;
     for (int y = 0; y < H; y++) {
         for (int x = 0; x < W; x++) {
@@ -47,7 +49,8 @@ static void write_checkerboard(const char *path) {
 }
 
 static void write_shapes(const char *path) {
-    unsigned char *px = calloc(W * H * 3, 1);
+    unsigned char *px = calloc((size_t)W * H, 3);
+    if (!px) { fprintf(stderr, "alloc failed\n"); return; }
 
     /* White circle */
     int cx1 = W / 4, cy1 = H / 2, r1 = 60;
@@ -100,7 +103,8 @@ static void write_shapes(const char *path) {
 }
 
 static void write_stripes(const char *path) {
-    unsigned char *px = malloc(W * H * 3);
+    unsigned char *px = calloc((size_t)W * H, 3);
+    if (!px) { fprintf(stderr, "alloc failed\n"); return; }
     for (int y = 0; y < H; y++) {
         for (int x = 0; x < W; x++) {
             int i = (y * W + x) * 3;

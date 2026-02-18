@@ -44,7 +44,8 @@ int v4l2_output_init(V4l2Output *vo, const char *device, int width, int height) 
 
 void v4l2_output_frame(V4l2Output *vo, const uint8_t *rgb24_pixels) {
     if (vo->fd < 0) return;
-    write(vo->fd, rgb24_pixels, vo->frame_size);
+    ssize_t n = write(vo->fd, rgb24_pixels, vo->frame_size);
+    (void)n; /* best-effort write to v4l2 device */
 }
 
 void v4l2_output_free(V4l2Output *vo) {

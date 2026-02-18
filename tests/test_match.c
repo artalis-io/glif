@@ -3,6 +3,12 @@
 #include "font.h"
 #include "match.h"
 #include <math.h>
+#include <stdlib.h>
+
+static const char *test_font(void) {
+    const char *env = getenv("GLIF_TEST_FONT");
+    return env ? env : "fonts/SFNSMono.ttf";
+}
 
 UTEST(match, cache_init_free) {
     MatchCache mc;
@@ -25,7 +31,7 @@ UTEST(match, brute_force_space_for_zero) {
     sampling_config_init(&sc);
 
     CharDatabase db;
-    int ret = char_db_create(&db, "fonts/SFNSMono.ttf", 10, 20, &sc);
+    int ret = char_db_create(&db, test_font(), 10, 20, &sc);
     if (ret != 0) {
         /* Skip test if font not available */
         return;
@@ -44,7 +50,7 @@ UTEST(match, cache_consistency) {
     sampling_config_init(&sc);
 
     CharDatabase db;
-    int ret = char_db_create(&db, "fonts/SFNSMono.ttf", 10, 20, &sc);
+    int ret = char_db_create(&db, test_font(), 10, 20, &sc);
     if (ret != 0) return;
 
     MatchCache mc;
@@ -71,7 +77,7 @@ UTEST(match, different_vectors_can_match_different_chars) {
     sampling_config_init(&sc);
 
     CharDatabase db;
-    int ret = char_db_create(&db, "fonts/SFNSMono.ttf", 10, 20, &sc);
+    int ret = char_db_create(&db, test_font(), 10, 20, &sc);
     if (ret != 0) return;
 
     /* Two very different vectors should at least potentially match different chars */
@@ -98,7 +104,7 @@ UTEST(match, uniform_vector_matches_consistently) {
     sampling_config_init(&sc);
 
     CharDatabase db;
-    int ret = char_db_create(&db, "fonts/SFNSMono.ttf", 10, 20, &sc);
+    int ret = char_db_create(&db, test_font(), 10, 20, &sc);
     if (ret != 0) return;
 
     Vec6 uniform = {{1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f}};
@@ -121,7 +127,7 @@ UTEST(match, all_matched_chars_in_printable_range) {
     sampling_config_init(&sc);
 
     CharDatabase db;
-    int ret = char_db_create(&db, "fonts/SFNSMono.ttf", 10, 20, &sc);
+    int ret = char_db_create(&db, test_font(), 10, 20, &sc);
     if (ret != 0) return;
 
     /* Create a small synthetic grid with various shape vectors */
@@ -158,7 +164,7 @@ UTEST(match, without_cache_works) {
     sampling_config_init(&sc);
 
     CharDatabase db;
-    int ret = char_db_create(&db, "fonts/SFNSMono.ttf", 10, 20, &sc);
+    int ret = char_db_create(&db, test_font(), 10, 20, &sc);
     if (ret != 0) return;
 
     Vec6 v = {{0.5f, 0.3f, 0.8f, 0.2f, 0.6f, 0.4f}};

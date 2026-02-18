@@ -1,5 +1,6 @@
 #include "temporal.h"
 #include <stdlib.h>
+#include <stdint.h>
 #include <string.h>
 
 /* ── Quickselect (copied from contrast.c — static there) ── */
@@ -37,6 +38,7 @@ void norm_smoother_apply(NormSmoother *ns, LightnessMap *lm, float alpha) {
     if (n < 2) return;
 
     /* Compute frame percentiles via quickselect on a scratch copy */
+    if (n > SIZE_MAX / sizeof(float)) return;
     float *scratch = malloc(n * sizeof(float));
     if (!scratch) return;
     memcpy(scratch, lm->data, n * sizeof(float));
@@ -85,8 +87,8 @@ void shape_smoother_apply(ShapeSmoother *ss, Grid *grid, float alpha) {
     if (n != ss->count) {
         free(ss->prev_shapes);
         free(ss->prev_externals);
-        ss->prev_shapes = malloc((size_t)n * sizeof(Vec6));
-        ss->prev_externals = malloc((size_t)n * sizeof(Vec10));
+        ss->prev_shapes = calloc((size_t)n, sizeof(Vec6));
+        ss->prev_externals = calloc((size_t)n, sizeof(Vec10));
         if (!ss->prev_shapes || !ss->prev_externals) {
             free(ss->prev_shapes);
             free(ss->prev_externals);

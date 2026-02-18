@@ -403,7 +403,15 @@ static int run_video(Config *cfg) {
     LightnessMap lm;
     lm.width = w;
     lm.height = h;
-    lm.data = malloc((size_t)w * (size_t)h * sizeof(float));
+    size_t npix = (size_t)w * (size_t)h;
+    if (npix > SIZE_MAX / sizeof(float)) {
+        grid_free(&grid);
+        free(frame_buf);
+        char_db_free(&db);
+        sampling_precompute_free(&pm);
+        return 1;
+    }
+    lm.data = malloc(npix * sizeof(float));
     if (!lm.data) {
         grid_free(&grid);
         free(frame_buf);

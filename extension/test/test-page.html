@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html>
+<head><title>Glif Extension Test Page</title></head>
+<body style="margin:0;background:#222;">
+  <video id="test-video" width="640" height="360" autoplay muted playsinline></video>
+  <script>
+    // Generate a synthetic video stream from canvas — no video file needed
+    const canvas = document.createElement('canvas');
+    canvas.width = 640;
+    canvas.height = 360;
+    const ctx = canvas.getContext('2d');
+    let frame = 0;
+
+    function draw() {
+      frame++;
+      // Colored bars that shift over time
+      for (let i = 0; i < 8; i++) {
+        ctx.fillStyle = `hsl(${(i * 45 + frame) % 360}, 70%, 50%)`;
+        ctx.fillRect(i * 80, 0, 80, 360);
+      }
+      // Moving circle for motion detection
+      const x = 320 + Math.sin(frame / 30) * 200;
+      const y = 180 + Math.cos(frame / 20) * 100;
+      ctx.fillStyle = '#fff';
+      ctx.beginPath();
+      ctx.arc(x, y, 40, 0, Math.PI * 2);
+      ctx.fill();
+      requestAnimationFrame(draw);
+    }
+    draw();
+
+    const stream = canvas.captureStream(30);
+    document.getElementById('test-video').srcObject = stream;
+  </script>
+</body>
+</html>

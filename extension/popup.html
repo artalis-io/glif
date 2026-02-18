@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="header">
+    <span class="logo">&gt;_</span>
+    <span class="title">Glif</span>
+  </div>
+
+  <button id="toggle" class="btn">Enable</button>
+  <button id="webcam-toggle" class="btn btn-webcam">Webcam</button>
+
+  <div class="controls" id="controls">
+    <label>
+      <span>Edge</span>
+      <input type="range" id="dir-crunch" min="0" max="5" step="0.05" value="1.25">
+      <span class="val" id="dir-val">1.25</span>
+    </label>
+    <label>
+      <span>Contrast</span>
+      <input type="range" id="global-crunch" min="0" max="5" step="0.05" value="1.5">
+      <span class="val" id="global-val">1.50</span>
+    </label>
+    <button id="hires" class="btn btn-small">Lo Res</button>
+  </div>
+
+  <div class="status" id="status">Click Enable on a page with video</div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

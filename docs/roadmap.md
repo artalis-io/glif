@@ -66,23 +66,36 @@ Four independent EMA smoothers reduce flicker in video/webcam:
 
 Per-frame percentile analysis with configurable noise floor and ceiling. Reduces crunch in dark scenes, increases it in bright ones.
 
+### Chrome Extension — Video Overlay ✅
+
+Real-time ASCII overlay on any web video via a Chrome Manifest V3 extension. The WASM pipeline (`ext.c`) is injected into the page's main world by the background service worker using `chrome.scripting.executeScript`.
+
+- **Overlay lifecycle** — Canvas positioned over `<video>`, frame loop via `requestVideoFrameCallback`, WebGL font-atlas rendering
+- **Persistence** — Enabled state saved to `chrome.storage.local`, auto-restores on new tabs via `host_permissions`
+- **SPA navigation** — Monkey-patched `pushState`/`replaceState` detect URL changes, destroy and re-create overlays (ignores same-URL state updates like YouTube playback time)
+- **Deferred video detection** — `MutationObserver` on `document.body` catches `<video>` elements added after page load (30s timeout)
+- **Event handshake** — `glif-ready` event eliminates the race condition between WASM load and param delivery (replaces `setTimeout`)
+- **Multi-instance safe** — Canvas ID set temporarily during `ext_init`, removed after WebGL context creation
+
+### Chrome Extension — Webcam Interception ✅
+
+Override `navigator.mediaDevices.getUserMedia` to process webcam frames through the WASM pipeline, returning an ASCII art `MediaStream` via `canvas.captureStream(30)`. Works with Zoom Web, Microsoft Teams, and Google Meet.
+
+- **Timing** — `webcam-proxy.js` runs as a `world: "MAIN"` content script at `document_start`, installing a transparent `getUserMedia` proxy before any page JS executes. This ensures interception works even when apps cache the `getUserMedia` reference during module initialization (Google Meet, Teams).
+- **Audio passthrough** — Audio tracks from the real stream are spliced into the processed stream
+- **Cleanup** — `glif-webcam-stop` clears the proxy handler and stops all processing
+
+### Extension Test Suite ✅
+
+Puppeteer-based smoke tests (`npm run test:ext`) that load the extension in a real Chrome instance with a synthetic video (canvas `captureStream`). Verifies: script injection, overlay creation/removal, WebGL context, params, hi-res, disable/re-enable, SPA `pushState` navigation, and `replaceState` no-op.
+
 ---
 
 ## Planned
 
-### Half-Block Rendering
+### ~~Half-Block Rendering~~ — Won't implement
 
-Use Unicode `▀▄█` characters with separate foreground and background colors to double effective vertical resolution. Each cell becomes two color regions instead of one glyph.
-
-**Approach:**
-- Split each cell vertically into top/bottom halves
-- Compute average color for each half
-- Use `▀` (upper half block) with fg=top color, bg=bottom color
-- Falls back to normal glyph matching when shape information is more valuable than color resolution
-
-**Impact:** Biggest single visual quality improvement possible. Doubles vertical color resolution at the cost of losing shape-based character selection.
-
-**Flag:** `--half-block` or `--hb`. Could also be a hybrid mode that uses half-blocks for smooth gradients and glyphs for edges.
+Glif's core identity is **shape-based character matching** — representing images through actual ASCII glyphs selected by 6D shape vectors. Half-block rendering (`▀▄█` with fg/bg colors) trades away character selection entirely for color resolution, producing output that is no longer ASCII art in any meaningful sense. This fundamentally contradicts the project's philosophy. If you want pixel-accurate color blocks, use an image viewer.
 
 ### SVG Output
 
