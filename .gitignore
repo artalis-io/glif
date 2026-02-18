@@ -28,6 +28,10 @@ videos/
 # Output files
 *.ppm
 
+# Node.js (extension tests)
+node_modules/
+
 # WASM build output
 web/glif.js
 web/glif.wasm
+extension/wasm/

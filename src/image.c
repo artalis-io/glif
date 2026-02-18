@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <math.h>
+#include <stdatomic.h>
 
 int image_load(Image *img, const char *path) {
     /* Force 3 channels (RGB) to avoid OOB on grayscale images (H6) */
@@ -40,10 +41,10 @@ void image_free(Image *img) {
 
 /* sRGB -> linear LUT: precomputed for all 256 byte values */
 static float srgb_lut[256];
-static int srgb_lut_ready = 0;
+static atomic_int srgb_lut_ready = 0;
 
 static void srgb_lut_init(void) {
-    if (srgb_lut_ready) return;
+    if (atomic_load_explicit(&srgb_lut_ready, memory_order_acquire)) return;
     for (int i = 0; i < 256; i++) {
         float c = (float)i / 255.0f;
         if (c <= 0.04045f)
@@ -51,7 +52,7 @@ static void srgb_lut_init(void) {
         else
             srgb_lut[i] = powf((c + 0.055f) / 1.055f, 2.4f);
     }
-    srgb_lut_ready = 1;
+    atomic_store_explicit(&srgb_lut_ready, 1, memory_order_release);
 }
 
 /* Recompute lightness values in-place (caller must provide pre-allocated lm->data).
@@ -81,10 +82,11 @@ int lightness_map_create(LightnessMap *lm, const Image *img) {
 
     lm->width = img->width;
     lm->height = img->height;
-    lm->data = malloc((size_t)lm->width * (size_t)lm->height * sizeof(float));
+    size_t npix = (size_t)lm->width * (size_t)lm->height;
+    if (npix > SIZE_MAX / sizeof(float)) return -1;
+    lm->data = malloc(npix * sizeof(float));
     if (!lm->data) return -1;
 
-    size_t npixels = (size_t)img->width * (size_t)img->height;
     const uint8_t *pixels = img->pixels;
     int channels = img->channels;
     float *dest = lm->data;
@@ -92,7 +94,7 @@ int lightness_map_create(LightnessMap *lm, const Image *img) {
 #ifdef _OPENMP
     #pragma omp parallel for schedule(static)
 #endif
-    for (size_t i = 0; i < npixels; i++) {
+    for (size_t i = 0; i < npix; i++) {
         const uint8_t *px = pixels + i * channels;
         dest[i] = 0.2126f * srgb_lut[px[0]]
                 + 0.7152f * srgb_lut[px[1]]
@@ -111,6 +113,7 @@ void lightness_map_normalize(LightnessMap *lm) {
     if (n < 2) return;
 
     /* Compute p5 and p95 from a sorted copy */
+    if (n > SIZE_MAX / sizeof(float)) return;
     float *sorted = malloc(n * sizeof(float));
     if (!sorted) return;
 

@@ -62,7 +62,8 @@ static void frame_full_redraw(FrameDiff *fd, const Grid *grid, int dark_mode) {
     }
     *p++ = '\033'; *p++ = '['; *p++ = '0'; *p++ = 'm';
 
-    fwrite(fd->buf, 1, (size_t)(p - fd->buf), stdout);
+    if (fwrite(fd->buf, 1, (size_t)(p - fd->buf), stdout) != (size_t)(p - fd->buf))
+        return;
     fflush(stdout);
 }
 
@@ -152,7 +153,8 @@ void frame_diff_render(FrameDiff *fd, const Grid *grid, int dark_mode) {
     if (p > fd->buf) {
         size_t rem = (size_t)(end - p);
         p += snprintf(p, rem, "\033[0m");
-        fwrite(fd->buf, 1, (size_t)(p - fd->buf), stdout);
+        if (fwrite(fd->buf, 1, (size_t)(p - fd->buf), stdout) != (size_t)(p - fd->buf))
+            return;
         fflush(stdout);
     }
 }

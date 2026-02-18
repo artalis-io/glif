@@ -1,15 +1,35 @@
 CC      = cc
-OMP_PREFIX = $(shell brew --prefix libomp 2>/dev/null)
+UNAME_S := $(shell uname -s)
+
+# OpenMP: macOS uses libomp via brew; Linux uses libgomp via -fopenmp
+ifeq ($(UNAME_S),Darwin)
+  OMP_PREFIX = $(shell brew --prefix libomp 2>/dev/null)
+  OMP_CFLAGS = -Xpreprocessor -fopenmp -I$(OMP_PREFIX)/include
+  OMP_LDFLAGS = -L$(OMP_PREFIX)/lib -lomp
+else
+  OMP_CFLAGS = -fopenmp
+  OMP_LDFLAGS = -fopenmp
+endif
+
 CFLAGS  = -std=c11 -Wall -Wextra -Wpedantic -Wshadow -Wformat=2 \
-          -fstack-protector-strong -O2 -Ivendor -Isrc \
-          -Xpreprocessor -fopenmp -I$(OMP_PREFIX)/include
+          -D_FORTIFY_SOURCE=2 -fstack-protector-strong -O2 -Ivendor -Isrc \
+          $(OMP_CFLAGS)
 TCFLAGS = $(CFLAGS) -Wno-extra-semi
-LDFLAGS = -lm -L$(OMP_PREFIX)/lib -lomp
+LDFLAGS = -lm $(OMP_LDFLAGS)
+
+# Linux needs _DEFAULT_SOURCE for clock_gettime/nanosleep with -std=c11
+# macOS exposes POSIX symbols by default; adding _POSIX_C_SOURCE restricts them
+ifeq ($(UNAME_S),Linux)
+  CFLAGS += -D_DEFAULT_SOURCE
+endif
 
 # Debug build with sanitizers (no OpenMP — conflicts with ASan)
 DEBUG_CFLAGS = -std=c11 -Wall -Wextra -Wpedantic -Wshadow -Wformat=2 \
                -g -O0 -fsanitize=address,undefined -fno-omit-frame-pointer \
                -Ivendor -Isrc
+ifeq ($(UNAME_S),Linux)
+  DEBUG_CFLAGS += -D_DEFAULT_SOURCE
+endif
 DEBUG_LDFLAGS = -lm -fsanitize=address,undefined
 
 SRC = src/main.c src/image.c src/sampling.c src/grid.c src/font.c \
@@ -118,8 +138,25 @@ wasm: $(WASM_UI_SRC)
 	  -s NO_FILESYSTEM=1 --no-entry \
 	  -o $(WASM_UI_OUT) $(WASM_UI_SRC) -lm
 
+# WASM build for Chrome extension (no UI framework, just pipeline + WebGL)
+WASM_EXT_SRC = $(CORE_SRC) src/platform/wasm/ext.c
+
+WASM_EXT_EXPORTS = '_ext_init','_ext_resize','_ext_frame','_ext_render', \
+                   '_ext_set_params','_ext_set_hires','_malloc','_free'
+
+wasm-ext: $(WASM_EXT_SRC)
+	@mkdir -p extension/wasm
+	emcc -std=gnu11 -O2 -msimd128 -Ivendor -Isrc \
+	  -Isrc/platform/wasm \
+	  -s WASM=1 -s ALLOW_MEMORY_GROWTH=1 -s FULL_ES2=1 \
+	  -s MODULARIZE=1 -s EXPORT_NAME='createGlifExt' \
+	  -s "EXPORTED_FUNCTIONS=[$(WASM_EXT_EXPORTS)]" \
+	  -s "EXPORTED_RUNTIME_METHODS=['HEAPU8']" \
+	  -s NO_FILESYSTEM=1 --no-entry \
+	  -o extension/wasm/glif-ext.js $(WASM_EXT_SRC) -lm
+
 clean:
 	rm -f $(OBJ) $(BIN) $(TESTS)
 	rm -f src/platform/linux/*.o src/platform/wasm/*.o
 
-.PHONY: all clean test debug wasm
+.PHONY: all clean test debug wasm wasm-ext

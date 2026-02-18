@@ -8,6 +8,7 @@
 #endif
 
 int grid_create(Grid *grid, const Image *img, int cell_w, int cell_h) {
+    if (cell_w <= 0 || cell_h <= 0) return -1;
     grid->cell_w = cell_w;
     grid->cell_h = cell_h;
     grid->cols = img->width / cell_w;

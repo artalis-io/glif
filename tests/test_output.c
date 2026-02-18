@@ -11,6 +11,11 @@
 #include <unistd.h>
 #include <fcntl.h>
 
+static const char *test_font(void) {
+    const char *env = getenv("GLIF_TEST_FONT");
+    return env ? env : "fonts/SFNSMono.ttf";
+}
+
 /* Helper: create a small grid with known characters and colors */
 static Grid make_test_grid(int rows, int cols, int cell_w, int cell_h, char fill_ch) {
     Grid grid;
@@ -61,7 +66,7 @@ UTEST(output, ppm_writes_valid_header) {
     sampling_config_init(&sc);
 
     CharDatabase db;
-    int ret = char_db_create(&db, "fonts/SFNSMono.ttf", 10, 20, &sc);
+    int ret = char_db_create(&db, test_font(), 10, 20, &sc);
     if (ret != 0) return;
 
     Grid grid = make_test_grid(3, 4, 10, 20, 'A');
@@ -94,7 +99,7 @@ UTEST(output, ppm_scale1_vs_scale4_different_sizes) {
     sampling_config_init(&sc);
 
     CharDatabase db;
-    int ret = char_db_create(&db, "fonts/SFNSMono.ttf", 10, 20, &sc);
+    int ret = char_db_create(&db, test_font(), 10, 20, &sc);
     if (ret != 0) return;
 
     Grid grid = make_test_grid(2, 3, 10, 20, 'X');
@@ -135,7 +140,7 @@ UTEST(output, ppm_file_size_matches_expected) {
     sampling_config_init(&sc);
 
     CharDatabase db;
-    int ret = char_db_create(&db, "fonts/SFNSMono.ttf", 10, 20, &sc);
+    int ret = char_db_create(&db, test_font(), 10, 20, &sc);
     if (ret != 0) return;
 
     int rows = 2, cols = 3, cell_w = 10, cell_h = 20, scale = 1;
@@ -243,7 +248,7 @@ UTEST(output, ppm_with_scale4_file_size) {
     sampling_config_init(&sc);
 
     CharDatabase db;
-    int ret = char_db_create(&db, "fonts/SFNSMono.ttf", 10, 20, &sc);
+    int ret = char_db_create(&db, test_font(), 10, 20, &sc);
     if (ret != 0) return;
 
     int rows = 2, cols = 3, cell_w = 10, cell_h = 20, scale = 4;
@@ -280,7 +285,7 @@ UTEST(output, ppm_invalid_path_fails) {
     sampling_config_init(&sc);
 
     CharDatabase db;
-    int ret = char_db_create(&db, "fonts/SFNSMono.ttf", 10, 20, &sc);
+    int ret = char_db_create(&db, test_font(), 10, 20, &sc);
     if (ret != 0) return;
 
     Grid grid = make_test_grid(1, 1, 10, 20, 'X');
@@ -448,8 +453,10 @@ UTEST(output, frame_diff_single_cell_change_uses_cursor_move) {
     /* Read content and look for the cursor position sequence */
     f = fopen(path, "rb");
     char *content = malloc((size_t)size);
-    fread(content, 1, (size_t)size, f);
+    ASSERT_TRUE(content != NULL);
+    size_t rd = fread(content, 1, (size_t)size, f);
     fclose(f);
+    ASSERT_EQ(rd, (size_t)size);
 
     /* Should contain \033[2;3H (row 2, col 3, 1-indexed) */
     int found = 0;
@@ -475,7 +482,7 @@ UTEST(output, ppm_pipe_init_and_free) {
     SamplingConfig sc;
     sampling_config_init(&sc);
     CharDatabase db;
-    if (char_db_create(&db, "fonts/SFNSMono.ttf", 10, 20, &sc) != 0) return;
+    if (char_db_create(&db, test_font(), 10, 20, &sc) != 0) return;
 
     Grid grid = make_test_grid(3, 4, 10, 20, 'A');
 
@@ -501,7 +508,7 @@ UTEST(output, ppm_pipe_scale1_no_render_bmps) {
     SamplingConfig sc;
     sampling_config_init(&sc);
     CharDatabase db;
-    if (char_db_create(&db, "fonts/SFNSMono.ttf", 10, 20, &sc) != 0) return;
+    if (char_db_create(&db, test_font(), 10, 20, &sc) != 0) return;
 
     Grid grid = make_test_grid(2, 2, 10, 20, 'X');
 
@@ -521,7 +528,7 @@ UTEST(output, ppm_pipe_frame_writes_valid_ppm) {
     SamplingConfig sc;
     sampling_config_init(&sc);
     CharDatabase db;
-    if (char_db_create(&db, "fonts/SFNSMono.ttf", 10, 20, &sc) != 0) return;
+    if (char_db_create(&db, test_font(), 10, 20, &sc) != 0) return;
 
     Grid grid = make_test_grid(2, 3, 10, 20, 'H');
 
@@ -575,7 +582,7 @@ UTEST(output, ppm_pipe_dark_vs_light_differ) {
     SamplingConfig sc;
     sampling_config_init(&sc);
     CharDatabase db;
-    if (char_db_create(&db, "fonts/SFNSMono.ttf", 10, 20, &sc) != 0) return;
+    if (char_db_create(&db, test_font(), 10, 20, &sc) != 0) return;
 
     Grid grid = make_test_grid(2, 2, 10, 20, 'M');
 
@@ -618,8 +625,10 @@ UTEST(output, ppm_pipe_dark_vs_light_differ) {
     rewind(f1); rewind(f2);
     uint8_t *d1 = malloc((size_t)s1);
     uint8_t *d2 = malloc((size_t)s2);
-    fread(d1, 1, (size_t)s1, f1);
-    fread(d2, 1, (size_t)s2, f2);
+    ASSERT_TRUE(d1 != NULL);
+    ASSERT_TRUE(d2 != NULL);
+    ASSERT_EQ(fread(d1, 1, (size_t)s1, f1), (size_t)s1);
+    ASSERT_EQ(fread(d2, 1, (size_t)s2, f2), (size_t)s2);
     fclose(f1); fclose(f2);
 
     int differ = 0;
@@ -643,7 +652,7 @@ UTEST(output, raw_pipe_frame_no_ppm_header) {
     SamplingConfig sc;
     sampling_config_init(&sc);
     CharDatabase db;
-    if (char_db_create(&db, "fonts/SFNSMono.ttf", 10, 20, &sc) != 0) return;
+    if (char_db_create(&db, test_font(), 10, 20, &sc) != 0) return;
 
     Grid grid = make_test_grid(2, 3, 10, 20, 'R');
 
@@ -677,7 +686,7 @@ UTEST(output, raw_pipe_frame_no_ppm_header) {
     /* Verify it does NOT start with "P6" */
     f = fopen(path, "rb");
     char header[2] = {0};
-    fread(header, 1, 2, f);
+    ASSERT_EQ(fread(header, 1, 2, f), (size_t)2);
     fclose(f);
     ASSERT_TRUE(header[0] != 'P' || header[1] != '6');
 
@@ -691,7 +700,7 @@ UTEST(output, ppm_pipe_render_fills_buffer) {
     SamplingConfig sc;
     sampling_config_init(&sc);
     CharDatabase db;
-    if (char_db_create(&db, "fonts/SFNSMono.ttf", 10, 20, &sc) != 0) return;
+    if (char_db_create(&db, test_font(), 10, 20, &sc) != 0) return;
 
     Grid grid = make_test_grid(2, 2, 10, 20, 'M');
 
@@ -767,7 +776,7 @@ UTEST(output, glif_writer_dark_flag) {
     FILE *f = fopen(path, "rb");
     ASSERT_TRUE(f != NULL);
     uint8_t hdr[GLIF_HEADER_SIZE];
-    fread(hdr, 1, GLIF_HEADER_SIZE, f);
+    ASSERT_EQ(fread(hdr, 1, GLIF_HEADER_SIZE, f), (size_t)GLIF_HEADER_SIZE);
     fclose(f);
 
     ASSERT_EQ(hdr[5] & GLIF_FLAG_DARK, GLIF_FLAG_DARK);
@@ -797,7 +806,7 @@ UTEST(output, glif_writer_frames_and_size) {
     /* Check frame count in header */
     rewind(f);
     uint8_t hdr[GLIF_HEADER_SIZE];
-    fread(hdr, 1, GLIF_HEADER_SIZE, f);
+    ASSERT_EQ(fread(hdr, 1, GLIF_HEADER_SIZE, f), (size_t)GLIF_HEADER_SIZE);
     ASSERT_EQ(read_u32(hdr + 18), (uint32_t)3);
 
     fclose(f);

@@ -14,13 +14,15 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install dependencies
-        run: sudo apt-get update && sudo apt-get install -y libomp-dev
+        run: sudo apt-get update && sudo apt-get install -y libomp-dev fonts-dejavu-core
 
       - name: Build
         run: make
 
       - name: Test
         run: make test
+        env:
+          GLIF_TEST_FONT: /usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf
 
   build-wasm:
     name: Build WASM

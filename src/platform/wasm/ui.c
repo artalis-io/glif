@@ -290,7 +290,7 @@ static void vp_render(const Grid *grid, Clay_BoundingBox bounds) {
     free(char_data);
 
     /* Upload color grid */
-    uint8_t *color_data = malloc((size_t)(ncells * 3));
+    uint8_t *color_data = calloc((size_t)ncells, 3);
     if (!color_data) return;
     for (int i = 0; i < ncells; i++) {
         color_data[i * 3 + 0] = grid->cells[i].r;
