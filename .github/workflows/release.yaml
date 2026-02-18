@@ -1,0 +1,106 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  build-cli:
+    name: Build CLI (Linux amd64)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y libomp-dev fonts-dejavu-core
+
+      - name: Build
+        run: make
+
+      - name: Test
+        run: make test
+        env:
+          GLIF_TEST_FONT: /usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: glif-linux-amd64
+          path: glif
+
+  build-extension:
+    name: Build Chrome extension
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Emscripten
+        uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: 3.1.51
+
+      - name: Build
+        run: make wasm-ext
+
+      - name: Package extension
+        run: |
+          VERSION=${GITHUB_REF_NAME#v}
+          cd extension
+          zip -r ../glif-chrome-extension-${VERSION}.zip . -x "test/*"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: glif-chrome-extension
+          path: glif-chrome-extension-*.zip
+
+  build-web-demo:
+    name: Build web demo
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Emscripten
+        uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: 3.1.51
+
+      - name: Build
+        run: make wasm
+
+      - name: Package web demo
+        run: |
+          VERSION=${GITHUB_REF_NAME#v}
+          tar czf glif-web-demo-${VERSION}.tar.gz web/
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: glif-web-demo
+          path: glif-web-demo-*.tar.gz
+
+  release:
+    name: Create GitHub Release
+    needs: [build-cli, build-extension, build-web-demo]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes \
+            artifacts/glif-linux-amd64/glif \
+            artifacts/glif-chrome-extension/glif-chrome-extension-*.zip \
+            artifacts/glif-web-demo/glif-web-demo-*.tar.gz

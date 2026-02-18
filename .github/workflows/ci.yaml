@@ -42,3 +42,22 @@ jobs:
         run: |
           test -f web/glif.wasm
           test -f web/glif.js
+
+  build-extension:
+    name: Build extension
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Emscripten
+        uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: 3.1.51
+
+      - name: Build
+        run: make wasm-ext
+
+      - name: Verify output
+        run: |
+          test -f extension/wasm/glif-ext.js
+          test -f extension/wasm/glif-ext.wasm

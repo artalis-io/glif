@@ -1,5 +1,7 @@
 # Glif
 
+[![CI](https://github.com/artalis-io/glif/actions/workflows/ci.yaml/badge.svg)](https://github.com/artalis-io/glif/actions/workflows/ci.yaml)
+
 Shape-based ASCII art renderer in C. Converts images and video into ASCII art using **6D shape vectors** instead of scalar brightness, producing sharp contour-aware output with readable edges.
 
 Supports images, live terminal video, video transcoding, webcam, and runs in the browser via WebAssembly.
@@ -167,6 +169,19 @@ The script auto-loads `v4l2loopback` if needed and uses direct v4l2 output (2 pr
 
 Real-time ASCII art overlay for any web video. Works on YouTube, Vimeo, Twitch, and any page with `<video>` elements.
 
+<a href="https://chromewebstore.google.com/detail/EXTENSION_ID">
+  <img src="https://img.shields.io/badge/Chrome_Web_Store-Install-blue?logo=googlechrome&logoColor=white" alt="Install from Chrome Web Store" height="28">
+</a>
+<a href="https://github.com/artalis-io/glif/releases/latest">
+  <img src="https://img.shields.io/badge/GitHub-Download_.zip-green?logo=github" alt="Download from GitHub Releases" height="28">
+</a>
+
+**Install from Chrome Web Store:** Click the badge above and press "Add to Chrome".
+
+**Install from GitHub Release:** Download the `.zip` from [Releases](https://github.com/artalis-io/glif/releases/latest), unzip, open `chrome://extensions`, enable Developer Mode, click "Load unpacked", select the unzipped `extension/` folder.
+
+**Build from source:**
+
 ```bash
 make wasm-ext                          # build WASM for the extension
 # Load extension/  as an unpacked extension in chrome://extensions
@@ -294,6 +309,27 @@ Extension tests use Puppeteer to launch Chrome with the extension loaded, naviga
 ## Attribution
 
 Implements the ASCII rendering technique from [Alex Harri's](https://alexharri.com) article **["Rendering ASCII art from images"](https://alexharri.com/blog/ascii-rendering)**. The core insight — representing characters as multi-dimensional shape vectors sampled from overlapping circles — comes from that article.
+
+### Vendored libraries
+
+| Library | Author | License |
+|---------|--------|---------|
+| [stb_image](https://github.com/nothings/stb) | Sean Barrett | Public domain |
+| [stb_image_write](https://github.com/nothings/stb) | Sean Barrett | Public domain |
+| [stb_truetype](https://github.com/nothings/stb) | Sean Barrett | Public domain |
+| [stb_rect_pack](https://github.com/nothings/stb) | Sean Barrett | Public domain |
+| [Nuklear](https://github.com/Immediate-Mode-UI/Nuklear) | Micha Mettke | MIT / Public domain |
+| [Clay](https://github.com/nicbarker/clay) | Nic Barker | zlib |
+| [utest.h](https://github.com/sheredom/utest.h) | Sheredom | Unlicense |
+
+### Fonts
+
+A monospace TTF font is required (`-f` flag). Fonts are user-provided and not included in the repository. During development, [Geist Mono](https://vercel.com/font) (SIL Open Font License) and SF Mono (Apple proprietary, not redistributable) were used for testing.
+
+### Images
+
+- `raccoon.jpg` and `wildboar.jpg` — Creative Commons licensed test images
+- Utility images (`checkerboard.png`, `gradient.png`, `shapes.png`, `stripes.png`) — generated, no attribution needed
 
 ## License
 
