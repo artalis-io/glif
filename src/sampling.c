@@ -32,24 +32,24 @@ void sampling_config_init(SamplingConfig *sc) {
 
     /*
      * Affecting table: which external circles influence each internal circle.
-     * Based on proximity — each internal circle is affected by the 2–4 nearest externals.
+     * Matches the article's AFFECTING_EXTERNAL_INDICES.
      *
-     * Internal 0 (top-left):    ext 0(top-left), 1(top-mid), 3(left-upper)
-     * Internal 1 (top-right):   ext 1(top-mid), 2(top-right), 5(right-upper)
-     * Internal 2 (mid-left):    ext 3(left-upper), 4(left-lower)
-     * Internal 3 (mid-right):   ext 5(right-upper), 6(right-lower)
-     * Internal 4 (bot-left):    ext 4(left-lower), 7(bot-left), 8(bot-mid)
-     * Internal 5 (bot-right):   ext 6(right-lower), 8(bot-mid), 9(bot-right)
+     * Internal 0 (top-left):    ext 0(top-left), 1(top-mid), 2(top-right), 4(left-lower)
+     * Internal 1 (top-right):   ext 0(top-left), 1(top-mid), 3(left-upper), 5(right-upper)
+     * Internal 2 (mid-left):    ext 2(top-right), 4(left-lower), 6(right-lower)
+     * Internal 3 (mid-right):   ext 3(left-upper), 5(right-upper), 7(bot-left)
+     * Internal 4 (bot-left):    ext 4(left-lower), 6(right-lower), 8(bot-mid), 9(bot-right)
+     * Internal 5 (bot-right):   ext 5(right-upper), 7(bot-left), 8(bot-mid), 9(bot-right)
      */
     int aff[NUM_INTERNAL][MAX_AFFECTING] = {
-        {0, 1, 3, -1},
-        {1, 2, 5, -1},
-        {3, 4, -1, -1},
-        {5, 6, -1, -1},
-        {4, 7, 8, -1},
-        {6, 8, 9, -1},
+        {0, 1, 2, 4},
+        {0, 1, 3, 5},
+        {2, 4, 6, -1},
+        {3, 5, 7, -1},
+        {4, 6, 8, 9},
+        {5, 7, 8, 9},
     };
-    int aff_count[] = {3, 3, 2, 2, 3, 3};
+    int aff_count[] = {4, 4, 3, 3, 4, 4};
 
     for (int i = 0; i < NUM_INTERNAL; i++) {
         sc->affecting_count[i] = aff_count[i];

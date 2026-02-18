@@ -1,5 +1,11 @@
 #include "grid.h"
 #include <stdlib.h>
+#include <stdint.h>
+
+#if defined(__EMSCRIPTEN__) && defined(__wasm_simd128__)
+#include <wasm_simd128.h>
+#define USE_WASM_SIMD 1
+#endif
 
 int grid_create(Grid *grid, const Image *img, int cell_w, int cell_h) {
     grid->cell_w = cell_w;
@@ -83,7 +89,9 @@ void grid_compute_vectors_fast(Grid *grid, const LightnessMap *lm,
     GridCell *cells = grid->cells;
     const CircleMask *masks = pm->masks;
 
+#ifdef _OPENMP
     #pragma omp parallel for schedule(static)
+#endif
     for (int ci = 0; ci < ncells; ci++) {
         GridCell *cell = &cells[ci];
         int px = cell->px;
@@ -98,18 +106,50 @@ void grid_compute_vectors_fast(Grid *grid, const LightnessMap *lm,
                 const int *offs = masks[i].offsets;
                 int cnt = masks[i].count;
                 float sum = 0;
+#if USE_WASM_SIMD
+                v128_t vsum = wasm_f32x4_const(0, 0, 0, 0);
+                int k = 0, cnt4 = cnt & ~3;
+                for (; k < cnt4; k += 4) {
+                    v128_t v = wasm_f32x4_make(
+                        data[base + offs[k]], data[base + offs[k+1]],
+                        data[base + offs[k+2]], data[base + offs[k+3]]);
+                    vsum = wasm_f32x4_add(vsum, v);
+                }
+                float tmp[4]; wasm_v128_store(tmp, vsum);
+                sum = tmp[0] + tmp[1] + tmp[2] + tmp[3];
+                for (; k < cnt; k++) sum += data[base + offs[k]];
+#else
+  #ifdef _OPENMP
                 #pragma omp simd reduction(+:sum)
+  #endif
                 for (int k = 0; k < cnt; k++)
                     sum += data[base + offs[k]];
+#endif
                 cell->shape.v[i] = sum * masks[i].inv_count;
             }
             for (int i = 0; i < NUM_EXTERNAL; i++) {
                 const int *offs = masks[NUM_INTERNAL + i].offsets;
                 int cnt = masks[NUM_INTERNAL + i].count;
                 float sum = 0;
+#if USE_WASM_SIMD
+                v128_t vsum = wasm_f32x4_const(0, 0, 0, 0);
+                int k = 0, cnt4 = cnt & ~3;
+                for (; k < cnt4; k += 4) {
+                    v128_t v = wasm_f32x4_make(
+                        data[base + offs[k]], data[base + offs[k+1]],
+                        data[base + offs[k+2]], data[base + offs[k+3]]);
+                    vsum = wasm_f32x4_add(vsum, v);
+                }
+                float tmp[4]; wasm_v128_store(tmp, vsum);
+                sum = tmp[0] + tmp[1] + tmp[2] + tmp[3];
+                for (; k < cnt; k++) sum += data[base + offs[k]];
+#else
+  #ifdef _OPENMP
                 #pragma omp simd reduction(+:sum)
+  #endif
                 for (int k = 0; k < cnt; k++)
                     sum += data[base + offs[k]];
+#endif
                 cell->external.v[i] = sum * masks[NUM_INTERNAL + i].inv_count;
             }
         } else {
@@ -152,10 +192,12 @@ void grid_compute_vectors_fast(Grid *grid, const LightnessMap *lm,
 void grid_compute_colors(Grid *grid, const Image *img) {
     int ncells = grid->rows * grid->cols;
 
+#ifdef _OPENMP
     #pragma omp parallel for schedule(static)
+#endif
     for (int ci = 0; ci < ncells; ci++) {
             GridCell *cell = &grid->cells[ci];
-            int rsum = 0, gsum = 0, bsum = 0, count = 0;
+            int64_t rsum = 0, gsum = 0, bsum = 0; int count = 0;
 
             for (int y = cell->py; y < cell->py + grid->cell_h && y < img->height; y++) {
                 for (int x = cell->px; x < cell->px + grid->cell_w && x < img->width; x++) {
@@ -167,9 +209,9 @@ void grid_compute_colors(Grid *grid, const Image *img) {
                 }
             }
             if (count > 0) {
-                cell->r = (uint8_t)(rsum / count);
-                cell->g = (uint8_t)(gsum / count);
-                cell->b = (uint8_t)(bsum / count);
+                cell->r = (uint8_t)(rsum / (int64_t)count);
+                cell->g = (uint8_t)(gsum / (int64_t)count);
+                cell->b = (uint8_t)(bsum / (int64_t)count);
             }
     }
 }

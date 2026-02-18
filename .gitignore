@@ -1,24 +1,19 @@
 # Build artifacts
 *.o
-/ascii3d
-/gen_test_images
-tests/test_vec6
-tests/test_sampling
-tests/test_image
-tests/test_grid
-tests/test_contrast
-tests/test_match
-tests/test_font
-tests/test_output
+/glif
+tests/test_*
+!tests/test_*.c
 
 # Debug symbols
 *.dSYM/
 
-# Benchmark tool
+# Tools
 tools/bench
-
-# Test image generator
 tools/gen_test_images
+
+# Test data
+images/
+videos/
 
 # macOS
 .DS_Store
@@ -32,3 +27,7 @@ tools/gen_test_images
 
 # Output files
 *.ppm
+
+# WASM build output
+web/glif.js
+web/glif.wasm

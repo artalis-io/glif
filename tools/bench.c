@@ -94,12 +94,12 @@ int main(int argc, char **argv) {
     printf("grid_colors:         %6.2f ms\n", t1 - t0);
 
     t0 = now_ms();
-    contrast_directional(&grid, &sc, dir_crunch);
+    contrast_directional(&grid, &sc, dir_crunch, NULL);
     t1 = now_ms();
     printf("contrast_dir:        %6.2f ms\n", t1 - t0);
 
     t0 = now_ms();
-    contrast_global(&grid, global_crunch);
+    contrast_global(&grid, global_crunch, NULL);
     t1 = now_ms();
     printf("contrast_global:     %6.2f ms\n", t1 - t0);
 
@@ -125,8 +125,8 @@ int main(int argc, char **argv) {
         grid_create(&g, &img, cell_w, cell_h);
         grid_compute_vectors_fast(&g, &lm3, &pm);
         grid_compute_colors(&g, &img);
-        contrast_directional(&g, &sc, dir_crunch);
-        contrast_global(&g, global_crunch);
+        contrast_directional(&g, &sc, dir_crunch, NULL);
+        contrast_global(&g, global_crunch, NULL);
         match_grid(&g, &db);
 
         t1 = now_ms();

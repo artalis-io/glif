@@ -1,3 +1,8 @@
+/* stb_rect_pack must be included BEFORE stb_truetype so that stb_truetype
+   uses the real stbrp_context struct instead of its tiny fallback.
+   Both implementations live here; nk_impl.c skips both via NK_NO_STB_*. */
+#define STB_RECT_PACK_IMPLEMENTATION
+#include "stb_rect_pack.h"
 #define STB_TRUETYPE_IMPLEMENTATION
 #include "stb_truetype.h"
 #include "font.h"
@@ -56,25 +61,14 @@ static float glyph_circle_average(const uint8_t *bitmap, int bw, int bh,
     return count > 0 ? sum / (float)count : 0.0f;
 }
 
-int char_db_create(CharDatabase *db, const char *font_path,
-                   int cell_w, int cell_h, const SamplingConfig *sc) {
-    memset(db, 0, sizeof(*db));
-    db->cell_w = cell_w;
-    db->cell_h = cell_h;
-
-    size_t font_size;
-    db->font_data = read_file(font_path, &font_size);
-    if (!db->font_data) {
-        fprintf(stderr, "error: failed to read font file '%s'\n", font_path);
-        return -1;
-    }
+/* Shared init: rasterize glyphs + compute shape vectors. db->font_data must be set. */
+static int char_db_init_from_font(CharDatabase *db, const SamplingConfig *sc) {
+    int cell_w = db->cell_w;
+    int cell_h = db->cell_h;
 
     stbtt_fontinfo font;
     if (!stbtt_InitFont(&font, db->font_data,
                         stbtt_GetFontOffsetForIndex(db->font_data, 0))) {
-        fprintf(stderr, "error: failed to parse font '%s'\n", font_path);
-        free(db->font_data);
-        db->font_data = NULL;
         return -1;
     }
 
@@ -94,7 +88,6 @@ int char_db_create(CharDatabase *db, const char *font_path,
         db->entries[i].bitmap = bmp;
 
         if (ch == ' ') {
-            /* Space has no glyph — shape stays zero */
             db->entries[i].shape = vec6_zero();
             continue;
         }
@@ -105,7 +98,6 @@ int char_db_create(CharDatabase *db, const char *font_path,
             continue;
         }
 
-        /* Get glyph bitmap from stb_truetype */
         int gw, gh, gx_off, gy_off;
         uint8_t *glyph_bmp = stbtt_GetGlyphBitmap(&font, scale, scale,
                                                     glyph, &gw, &gh,
@@ -115,20 +107,16 @@ int char_db_create(CharDatabase *db, const char *font_path,
             continue;
         }
 
-        /* Compute baseline offset: place glyph within the cell */
         int ascent, descent, line_gap;
         stbtt_GetFontVMetrics(&font, &ascent, &descent, &line_gap);
         int baseline = (int)(ascent * scale);
 
-        /* Center horizontally */
         int lsb, advance;
         stbtt_GetGlyphHMetrics(&font, glyph, &advance, &lsb);
         int glyph_advance = (int)(advance * scale);
         int x_offset = (cell_w - glyph_advance) / 2 + (int)(lsb * scale);
-
         int y_offset = baseline + gy_off;
 
-        /* Copy glyph into cell-sized bitmap */
         for (int gy = 0; gy < gh; gy++) {
             for (int gx = 0; gx < gw; gx++) {
                 int dx = gx + x_offset;
@@ -141,7 +129,6 @@ int char_db_create(CharDatabase *db, const char *font_path,
 
         stbtt_FreeBitmap(glyph_bmp, NULL);
 
-        /* Compute 6D shape vector from internal sampling circles */
         Vec6 shape;
         float cw = (float)cell_w;
         float ch_f = (float)cell_h;
@@ -153,10 +140,60 @@ int char_db_create(CharDatabase *db, const char *font_path,
                                               cx_px, cy_px, r_px);
         }
 
-        /* Normalize shape vector */
-        db->entries[i].shape = vec6_normalize(shape);
+        db->entries[i].shape = shape;
     }
 
+    /* Per-component max normalization */
+    float comp_max[NUM_INTERNAL] = {0};
+    for (int i = 0; i < CHAR_COUNT; i++) {
+        for (int s = 0; s < NUM_INTERNAL; s++) {
+            if (db->entries[i].shape.v[s] > comp_max[s])
+                comp_max[s] = db->entries[i].shape.v[s];
+        }
+    }
+    for (int i = 0; i < CHAR_COUNT; i++) {
+        for (int s = 0; s < NUM_INTERNAL; s++) {
+            if (comp_max[s] > 1e-8f)
+                db->entries[i].shape.v[s] /= comp_max[s];
+        }
+    }
+
+    return 0;
+}
+
+int char_db_create(CharDatabase *db, const char *font_path,
+                   int cell_w, int cell_h, const SamplingConfig *sc) {
+    memset(db, 0, sizeof(*db));
+    db->cell_w = cell_w;
+    db->cell_h = cell_h;
+
+    size_t font_size;
+    db->font_data = read_file(font_path, &font_size);
+    if (!db->font_data) {
+        fprintf(stderr, "error: failed to read font file '%s'\n", font_path);
+        return -1;
+    }
+    db->owns_font_data = 1;
+
+    if (char_db_init_from_font(db, sc) != 0) {
+        fprintf(stderr, "error: failed to parse font '%s'\n", font_path);
+        return -1;
+    }
+    return 0;
+}
+
+int char_db_create_from_memory(CharDatabase *db, const unsigned char *font_data,
+                               size_t font_len, int cell_w, int cell_h,
+                               const SamplingConfig *sc) {
+    (void)font_len;
+    memset(db, 0, sizeof(*db));
+    db->cell_w = cell_w;
+    db->cell_h = cell_h;
+    db->font_data = (unsigned char *)font_data;
+    db->owns_font_data = 0;
+
+    if (char_db_init_from_font(db, sc) != 0)
+        return -1;
     return 0;
 }
 
@@ -226,6 +263,7 @@ void char_db_free(CharDatabase *db) {
         free(db->entries[i].bitmap);
         db->entries[i].bitmap = NULL;
     }
-    free(db->font_data);
+    if (db->owns_font_data)
+        free(db->font_data);
     db->font_data = NULL;
 }

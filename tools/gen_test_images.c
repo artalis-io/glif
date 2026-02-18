@@ -1,5 +1,5 @@
 /*
- * Generate test PNG images for ascii3d.
+ * Generate test PNG images for glif.
  * Build: cc -O2 -Ivendor -o gen_test_images tools/gen_test_images.c -lm
  * Run:   ./gen_test_images
  */

@@ -60,7 +60,9 @@ void match_grid(Grid *grid, const CharDatabase *db) {
     int ncells = grid->rows * grid->cols;
     GridCell *cells = grid->cells;
 
+#ifdef _OPENMP
     #pragma omp parallel
+#endif
     {
         /* Per-thread cache to avoid data races */
         MatchCache mc;
@@ -69,7 +71,9 @@ void match_grid(Grid *grid, const CharDatabase *db) {
             mc.cache_size = 0;
         }
 
+#ifdef _OPENMP
         #pragma omp for schedule(static)
+#endif
         for (int i = 0; i < ncells; i++) {
             cells[i].ch = match_find(&cells[i].shape, db, &mc);
         }

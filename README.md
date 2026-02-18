@@ -1,53 +1,69 @@
-# ASCII3D
+# Glif
 
-Shape-based ASCII art renderer in C. Implements the rendering technique from [Alex Harri's article](https://alexharri.com/blog/ascii-rendering) — treating ASCII characters as **6D shape vectors** sampled from circles rather than single brightness values.
+Shape-based ASCII art renderer in C. Converts images and video into ASCII art using **6D shape vectors** instead of scalar brightness, producing sharp contour-aware output with readable edges.
 
-This produces dramatically sharper ASCII art with readable contours compared to traditional brightness-only mapping.
+Supports images, live terminal video, video transcoding, webcam, and runs in the browser via WebAssembly.
+
+![Glif example output](assets/example.png)
+
+**[Live demo](https://glif.artalis.io)**
 
 ## How it works
 
-Each cell in the output grid is matched to the ASCII character whose **shape** most closely resembles the image content in that region. Shape is captured by sampling 6 overlapping circles arranged in a 3×2 staggered grid within each cell. Each circle's average luminance becomes one component of a 6D vector.
+Traditional ASCII art maps each cell to a character by brightness alone. Glif instead samples **6 overlapping circles** arranged in a 3x2 staggered grid within each cell, producing a 6-dimensional shape vector. Characters are matched by nearest-neighbor distance in 6D Euclidean space, so a diagonal stroke matches `/` rather than a medium-brightness character like `+`.
 
-Directional contrast enhancement (using 10 additional circles outside the cell boundary) and global contrast enhancement sharpen edges before matching.
+The pipeline:
 
-Character shapes are precomputed from a monospace font using the same sampling circles, then matched via nearest-neighbor in 6D Euclidean space.
+1. **Lightness map** — Convert sRGB pixels to linear luminance via a 256-entry LUT
+2. **Grid decomposition** — Divide the image into cells (default 10x20px, 2:1 aspect)
+3. **Shape vectors** — Sample 6 internal circles per cell into a Vec6
+4. **External sampling** — Sample 10 circles outside each cell boundary into a Vec10
+5. **Directional contrast** — Diff internal vs. neighboring external samples, normalize, exponentiate
+6. **Global contrast** — Normalize by max component, exponentiate
+7. **Character matching** — Find nearest character Vec6 in the precomputed font database
+8. **Adaptive contrast** — Per-frame percentile analysis adjusts contrast for dark/bright scenes
+9. **Temporal stabilization** — EMA smoothing of normalization, shape vectors, contrast stats, and character hysteresis to reduce flicker in video
 
 ## Building
 
 ```bash
-make
+make          # build glif CLI
+make wasm     # build WebAssembly (requires Emscripten)
+make test     # run unit tests (136 tests)
+make debug    # build with AddressSanitizer + UBSan
 ```
 
-Requires a C11 compiler (gcc, clang) and OpenMP for parallel acceleration. On macOS:
+Requires a C11 compiler and OpenMP. On macOS:
 
 ```bash
 brew install libomp
 ```
 
-No other external dependencies — `stb_image.h` and `stb_truetype.h` are vendored.
-
-A debug build with AddressSanitizer/UBSan is available via `make debug`.
+No other dependencies — `stb_image.h`, `stb_truetype.h`, Nuklear, and Clay are vendored.
 
 ## Usage
 
 ```bash
-# Plain ASCII output
-./ascii3d photo.png -f fonts/MyMono.ttf
+# Plain ASCII
+./glif photo.png -f fonts/GeistMono-Regular.ttf
 
-# ANSI truecolor output
-./ascii3d photo.png -f fonts/MyMono.ttf -c
+# ANSI truecolor terminal output
+./glif photo.png -f fonts/GeistMono-Regular.ttf -c
 
-# PPM image output
-./ascii3d photo.png -f fonts/MyMono.ttf -o output.ppm
+# Auto-fit to terminal, colored
+./glif photo.png -f fonts/GeistMono-Regular.ttf -a -c
 
-# Auto-fit to terminal size
-./ascii3d photo.png -f fonts/MyMono.ttf -a
+# PPM image output (scale 4 for crisp glyphs)
+./glif photo.png -f fonts/GeistMono-Regular.ttf -o output.ppm -s 4
 
-# Custom cell size and contrast
-./ascii3d photo.png -f fonts/MyMono.ttf -w 8 -h 16 -d 2.0 -g 2.0
+# Dark mode PPM (black background, colored glyphs)
+./glif photo.png -f fonts/GeistMono-Regular.ttf -o output.ppm --dark
+
+# High contrast for line art
+./glif diagram.png -f fonts/GeistMono-Regular.ttf -d 3.0 -g 3.0
 ```
 
-You need to provide a monospace TTF font via `-f`. Any monospace font works — the font's glyph shapes directly affect output quality.
+A monospace TTF font is required via `-f`. The font's glyph shapes directly affect output quality — different fonts produce different results.
 
 ## Options
 
@@ -61,69 +77,191 @@ You need to provide a monospace TTF font via `-f`. Any monospace font works — 
 | `-a, --auto-fit` | Fit output to terminal size | off |
 | `-c, --color` | ANSI truecolor terminal output | off |
 | `-o, --output <file>` | Write PPM image file | — |
-| `-s, --scale <n>` | PPM render scale for sharp text | 4 |
+| `-s, --scale <n>` | PPM render scale | 4 |
+| `--dark` | Black background + colored glyphs | off |
+| `--video <W> <H>` | Video mode: read raw RGB24 frames from stdin | — |
+| `--fps <n>` | Target framerate | 30 |
+| `--pipe-ppm` | Video: write PPM frames to stdout | off |
+| `--pipe-raw` | Video: write raw RGB24 to stdout | off |
+| `--v4l2 <device>` | Video: write to v4l2loopback (Linux) | — |
+| `--adapt-floor <0-255>` | Adaptive contrast noise floor | off |
+| `--adapt-ceil <0-255>` | Adaptive contrast ceiling | 80 |
+| `--output-glif <path>` | Video: write .glif binary file | — |
 
-## Examples
+## Video in terminal
+
+Pipe raw RGB24 frames from ffmpeg to render video as live ASCII art:
 
 ```bash
-# High-res, high character count — small cells = more detail
-./ascii3d photo.png -f fonts/SFNSMono.ttf -w 4 -h 8 -d 2.0 -g 2.0
+# Color ASCII video, auto-fit to terminal
+ffmpeg -i video.mp4 -f rawvideo -pix_fmt rgb24 -s 640x480 - 2>/dev/null | \
+  ./glif --video 640 480 -f fonts/GeistMono-Regular.ttf -c -a --fps 30
 
-# Same, with PPM image output (scale 4 for crisp glyphs)
-./ascii3d photo.png -f fonts/SFNSMono.ttf -w 4 -h 8 -d 2.0 -g 2.0 -o out.ppm -s 4
+# Higher resolution input
+ffmpeg -i video.mp4 -f rawvideo -pix_fmt rgb24 -s 640x480 - 2>/dev/null | \
+  ./glif --video 640 480 -f fonts/GeistMono-Regular.ttf -c -a --fps 30 --dark
 
-# Modern terminal (120×40) with ANSI truecolor
-./ascii3d photo.png -f fonts/SFNSMono.ttf -w 9 -h 18 -c
-
-# Auto-fit to current terminal size
-./ascii3d photo.png -f fonts/SFNSMono.ttf -a -c
-
-# Classic 80×24 terminal
-./ascii3d photo.png -f fonts/SFNSMono.ttf -w 14 -h 31
-
-# Cranked contrast for line art / high-contrast images
-./ascii3d diagram.png -f fonts/SFNSMono.ttf -d 3.0 -g 3.0
-
-# Different fonts change the output character — experiment!
-./ascii3d photo.png -f fonts/GeistMono-Regular.ttf -w 6 -h 12 -c
+# Adaptive contrast (better for varying lighting)
+ffmpeg -i video.mp4 -f rawvideo -pix_fmt rgb24 -s 640x480 - 2>/dev/null | \
+  ./glif --video 640 480 -f fonts/GeistMono-Regular.ttf -c -a --fps 30 \
+    --adapt-floor 5 --adapt-ceil 80
 ```
 
-Cell size controls the resolution/detail trade-off: smaller cells = more characters = finer detail. Directional crunch (`-d`) sharpens edges; global crunch (`-g`) increases overall contrast. Both default to moderate values — push them to 2.0–3.0 for sharper results.
+Uses diff-based rendering — only changed cells are emitted as ANSI escape codes. A byte-cost estimator dynamically chooses between diff and full redraw per frame.
+
+## Video transcoding
+
+Transcode any video into an ASCII art MP4 with audio using the convenience script:
+
+```bash
+# High-res (default) — 4x8 cells, scale 4, high contrast
+./scripts/glif-transcode.sh movie.mp4
+
+# Dark scenes — lower contrast, preserves shadow detail
+./scripts/glif-transcode.sh movie.mp4 --dark
+
+# Low-res retro — 120x40 grid, small file size
+./scripts/glif-transcode.sh movie.mp4 --lo
+
+# Custom output path
+./scripts/glif-transcode.sh movie.mp4 -o output.mp4
+```
+
+The script probes the input for resolution and framerate, runs the full `ffmpeg -> glif -> ffmpeg` pipeline, and muxes the original audio track. ASCII art compresses well with x264 — large flat regions and repeated glyphs give favorable compression ratios.
+
+| Preset | Cells | Scale | Contrast | Use case |
+|--------|-------|-------|----------|----------|
+| `--hi` (default) | 4x8 | 4 | 2.5 / 2.5 | Dense, crisp, high contrast |
+| `--dark` | 4x8 | 4 | 1.3 / 1.3 | Dark scenes, night footage |
+| `--lo` | 10x20 | 1 | 2.5 / 2.5 | Small file, retro look |
+
+Or build the pipeline manually:
+
+```bash
+ffmpeg -i input.mp4 -f rawvideo -pix_fmt rgb24 -s 640x480 - 2>/dev/null | \
+  ./glif --video 640 480 -f fonts/GeistPixel-Square.ttf --pipe-raw --dark -s 4 | \
+  ffmpeg -f rawvideo -pix_fmt rgb24 -video_size 2560x1920 -framerate 30 -i - \
+    -c:v libx264 -pix_fmt yuv420p output.mp4
+```
+
+## Virtual webcam
+
+Turn your webcam into a live ASCII art camera visible in Zoom, Google Meet, etc.
+
+**Linux (v4l2loopback):**
+
+```bash
+# One-liner with convenience script
+./scripts/glif-webcam.sh
+
+# Options
+./scripts/glif-webcam.sh --src /dev/video0 --dst /dev/video10 --scale 2 --dark
+./scripts/glif-webcam.sh --light --font fonts/GeistMono-Regular.ttf
+```
+
+The script auto-loads `v4l2loopback` if needed and uses direct v4l2 output (2 processes) when available, falling back to a 3-process pipe.
+
+**macOS / Windows:** Use `--pipe-raw` piped through ffmpeg to OBS Virtual Camera. See [docs/webcam.md](docs/webcam.md) for setup on all platforms.
+
+## Web demo
+
+The C core compiles to WebAssembly via Emscripten. The web UI uses Nuklear for widgets, Clay for layout, and a WebGL font-atlas shader for GPU-accelerated rendering.
+
+```bash
+make wasm
+cd web && python3 -m http.server 8000
+```
+
+Supports drag-and-drop images, video/GIF playback, and live webcam. All processing runs client-side. HiDPI/Retina displays are fully supported with DPR-aware canvas sizing and font atlas rendering.
+
+**[Try it live at glif.artalis.io](https://glif.artalis.io)**
+
+## Architecture
+
+```
+src/
+  image.c/h         sRGB-to-linear lightness via LUT
+  sampling.c/h      Circle sampling geometry and precomputed offset masks
+  grid.c/h          Image-to-grid decomposition, Vec6/Vec10 computation
+  font.c/h          Font rasterization and character shape database
+  contrast.c/h      Directional + global + adaptive contrast enhancement
+  match.c/h         Nearest-neighbor character matching with LRU cache
+  output.c/h        Plain, ANSI, PPM, raw pipe, .glif binary output
+  temporal.c/h      Temporal smoothing (normalization, shape, contrast, hysteresis)
+  vec6.h            Header-only 6D/10D vector math
+  main.c            CLI entry point
+
+  platform/wasm/
+    ui.c             WASM app: init, frame loop, rendering pipeline
+    ui_layout.c/h    Responsive layout (desktop/tablet/mobile breakpoints)
+    nk_webgl.c/h     Nuklear WebGL rendering backend
+    nk_impl.c        Nuklear implementation defines
+    clay_impl.c      Clay implementation defines
+
+  platform/linux/
+    v4l2_output.c/h  Direct v4l2loopback output
+
+vendor/               Vendored single-header libraries (stb, Nuklear, Clay, utest.h)
+tests/                Unit tests (136 tests across 9 test files)
+scripts/              Convenience scripts for transcoding and webcam
+tools/                Benchmark tool
+```
+
+### Rendering pipeline
+
+```
+Input image/frame
+       |
+  sRGB -> linear luminance (LUT)
+       |
+  Grid decomposition (cells)
+       |
+  6 internal circles -> Vec6 shape vector
+  10 external circles -> Vec10 contrast vector
+       |
+  Directional contrast (internal vs. neighbors)
+  Global contrast (normalize + exponentiate)
+  Adaptive contrast (per-frame percentile scaling)
+       |
+  [Temporal smoothing for video]
+       |
+  Nearest-neighbor match in 6D space -> character
+       |
+  Output: ASCII | ANSI | PPM | raw | .glif | WebGL
+```
 
 ## Performance
 
-The pipeline is optimized for real-time throughput via three techniques:
+Three optimizations enable real-time throughput:
 
-1. **sRGB LUT** — 256-entry lookup table replaces per-pixel `powf()` in lightness computation (21x speedup)
-2. **Precomputed circle masks** — Index-offset tables built once at startup eliminate per-pixel distance tests and `floorf`/`ceilf` calls. Interior cells skip bounds checking entirely (4.4x speedup)
-3. **OpenMP parallel + SIMD** — All pipeline stages run across cores with `#pragma omp parallel for`; inner accumulation loops use `#pragma omp simd reduction` (2x+ speedup)
+1. **sRGB LUT** — 256-entry lookup table replaces per-pixel `powf()` (21x speedup)
+2. **Precomputed circle masks** — Offset tables built at startup eliminate per-pixel distance tests; interior cells skip bounds checking (4.4x speedup)
+3. **OpenMP + SIMD** — All pipeline stages parallelized; inner loops use SIMD reduction (2x+ on multicore)
 
-Benchmarks on Apple M3 Pro (11 cores), compiled with `-O2`:
+Benchmarks on Apple M3 Pro (11 cores), `-O2`:
 
 | Image | Resolution | Cells | Per-frame | FPS |
 |-------|-----------|-------|-----------|-----|
-| raccoon.jpg | 679×679 | 2,211 (33×67) | 0.69 ms | 1,440 |
-| wildboar.jpg | 1100×731 | 3,960 (55×36) | 0.91 ms | 1,096 |
-
-Per-frame includes: lightness map, grid vector computation, color averaging, directional + global contrast, and character matching. One-time costs (image loading, font/character DB, mask precomputation) are excluded.
-
-Build and run the benchmark tool:
+| raccoon.jpg | 679x679 | 2,211 | 0.69 ms | 1,440 |
+| wildboar.jpg | 1100x731 | 3,960 | 0.91 ms | 1,096 |
 
 ```bash
 make tools/bench
-./tools/bench images/raccoon.jpg -f fonts/SFNSMono.ttf
+./tools/bench images/raccoon.jpg -f fonts/GeistMono-Regular.ttf
 ```
 
 ## Testing
 
 ```bash
-make test
+make test    # 136 tests across 9 modules
 ```
+
+Tests cover all pipeline stages: vector math, sampling, image loading, grid computation, contrast enhancement, character matching, output formats, and temporal smoothing. Uses [Sheredom's utest.h](https://github.com/sheredom/utest.h) framework.
 
 ## Attribution
 
-This project implements the ASCII rendering technique described by [Alex Harri](https://alexharri.com) in his article **["Rendering ASCII art from images"](https://alexharri.com/blog/ascii-rendering)**. The core insight — representing characters as multi-dimensional shape vectors sampled from overlapping circles rather than scalar brightness values — comes directly from that article.
+Implements the ASCII rendering technique from [Alex Harri's](https://alexharri.com) article **["Rendering ASCII art from images"](https://alexharri.com/blog/ascii-rendering)**. The core insight — representing characters as multi-dimensional shape vectors sampled from overlapping circles — comes from that article.
 
 ## License
 
-MIT
+MIT License. Copyright (c) 2026 Mark Farkas.

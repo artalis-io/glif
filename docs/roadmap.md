@@ -1,0 +1,214 @@
+# Glif Roadmap
+
+## Completed
+
+### Video Mode (CLI) ✅
+
+Pipe raw frames from ffmpeg — keeps glif dependency-free:
+
+```bash
+ffmpeg -i movie.mp4 -f rawvideo -pix_fmt rgb24 -s 640x480 - | \
+  ./glif --video 640 480 -f fonts/SFNSMono.ttf -c --dark --fps 30
+```
+
+### Diff-Based Rendering ✅
+
+`FrameDiff` renderer only emits ANSI escape codes for changed cells. Uses byte-cost estimation to adaptively choose between diff path and full redraw:
+
+- **Diff cost**: `changed × cell_cost + jumps × 9 + 4`
+- **Full cost**: `3 + total × cell_cost + rows × 5`
+
+Picks whichever is smaller. First frame always renders all cells (prev buffer is zeroed). Subsequent identical frames emit zero bytes.
+
+### Re-encoding to Video via ffmpeg ✅
+
+`--pipe-ppm` and `--pipe-raw` write frames to stdout for ffmpeg to consume. Convenience script `scripts/glif-transcode.sh` handles the full pipeline with presets (hi/dark/lo).
+
+### `.glif` Binary Format ✅
+
+Compact per-frame capture for offline storage and replay. `--output-glif <path>` in video mode.
+
+```
+Header (24 bytes, little-endian):
+  Offset  Size  Field
+  0       4     magic:    "GLIF"
+  4       1     version:  uint8    (currently 1)
+  5       1     flags:    uint8    (bit 0: dark_mode)
+  6       2     cols:     uint16
+  8       2     rows:     uint16
+  10      2     cell_w:   uint16
+  12      2     cell_h:   uint16
+  14      4     fps:      float32
+  18      4     frames:   uint32   (written on finish)
+  22      2     reserved: uint16   (zero)
+
+Per frame (cols × rows × 4 bytes):
+  [ch, r, g, b] per cell
+```
+
+### WASM + Web Frontend ✅
+
+C core compiles to WebAssembly via Emscripten. Web UI built with Nuklear (widgets) + Clay (layout), rendered via WebGL with a font-atlas shader. HiDPI/Retina support with DPR-aware canvas and font rendering.
+
+### Temporal Stabilization ✅
+
+Four independent EMA smoothers reduce flicker in video/webcam:
+- **NormSmoother** — smoothed normalization percentiles
+- **ShapeSmoother** — temporal EMA on Vec6/Vec10 shape vectors
+- **ContrastSmoother** — smoothed adaptive contrast stats
+- **MatchSmoother** — character hysteresis (prevents switching on marginal distance differences)
+
+### Virtual Webcam ✅
+
+`--v4l2` for direct Linux v4l2loopback output, `--pipe-raw` for cross-platform piping through ffmpeg to OBS. Convenience script `scripts/glif-webcam.sh`.
+
+### Adaptive Contrast ✅
+
+Per-frame percentile analysis with configurable noise floor and ceiling. Reduces crunch in dark scenes, increases it in bright ones.
+
+---
+
+## Planned
+
+### Half-Block Rendering
+
+Use Unicode `▀▄█` characters with separate foreground and background colors to double effective vertical resolution. Each cell becomes two color regions instead of one glyph.
+
+**Approach:**
+- Split each cell vertically into top/bottom halves
+- Compute average color for each half
+- Use `▀` (upper half block) with fg=top color, bg=bottom color
+- Falls back to normal glyph matching when shape information is more valuable than color resolution
+
+**Impact:** Biggest single visual quality improvement possible. Doubles vertical color resolution at the cost of losing shape-based character selection.
+
+**Flag:** `--half-block` or `--hb`. Could also be a hybrid mode that uses half-blocks for smooth gradients and glyphs for edges.
+
+### SVG Output
+
+Vector export for web embedding and infinite scaling.
+
+**Approach:**
+- One `<text>` or `<rect>`+`<text>` element per cell
+- Monospace font specified via CSS `font-family`
+- Dark mode: colored text on black rect; light mode: white text on colored rect
+- Minimal SVG — no embedded fonts, just character references
+
+**Flag:** `-o output.svg` (detect by extension) or `--svg`.
+
+### Web UI Export
+
+Download button in the web UI to save the current render as PNG or SVG.
+
+**Approach:**
+- PNG: read WebGL framebuffer pixels via `gl.readPixels()`, encode with canvas `toBlob()`
+- SVG: generate from the grid data (same as CLI SVG output)
+- Trigger browser download via `URL.createObjectURL()`
+
+### .glif Player
+
+Web-based player for the `.glif` binary capture format.
+
+**Approach:**
+- JS decoder parses the 24-byte header, streams frames
+- Reuse existing WebGL font-atlas shader for rendering
+- Playback controls: play/pause, seek, speed, loop
+- Could also embed in the existing web UI as a drag-and-drop handler for `.glif` files
+
+### .glif Delta Compression
+
+Flag byte + only changed cells to shrink file sizes for typical video content.
+
+**Approach:**
+- Frame type byte: `0x00` = keyframe (all cells), `0x01` = delta
+- Delta frame: count of changed cells (uint16), followed by [index(uint16), ch, r, g, b] per changed cell
+- Periodic keyframes (every N frames) for seeking
+- Backwards compatible: version bump to 2, v1 readers skip unknown frame types
+
+**Expected compression:** 60-80% reduction for typical video (most cells unchanged between frames).
+
+### 256-Color and 16-Color ANSI Fallback
+
+Support older terminals and SSH sessions where truecolor isn't available.
+
+**Approach:**
+- `--color=256`: map RGB to nearest xterm-256 palette entry
+- `--color=16`: map to standard 16 ANSI colors
+- Auto-detect via `$COLORTERM` environment variable (truecolor if `truecolor` or `24bit`, else check `$TERM` for 256-color support)
+
+### Background Color Matching
+
+Use ANSI background color (`\033[48;2;...m`) for each cell's average color while keeping the glyph as foreground.
+
+**Approach:**
+- Compute average color for the cell region
+- Set background to average color, foreground to contrasting color (white or black based on luminance)
+- Combined with shape-based glyph matching, this gives both color accuracy and edge detail
+
+**Flag:** `--bg-color` or enabled by default in `--color` mode.
+
+### Font Comparison View
+
+Side-by-side rendering with different fonts in the web UI.
+
+**Approach:**
+- Split viewport into 2-4 panels, each with its own `CharDatabase`
+- Drag-and-drop font files onto individual panels
+- Shared image/video source, independent font rendering
+- Useful for choosing the best font for a given use case
+
+### Config Presets
+
+Save and load named parameter presets.
+
+**Approach:**
+- Simple key=value text files in `~/.config/glif/` or project-local `.glifrc`
+- `--preset <name>` loads a preset; `--save-preset <name>` saves current flags
+- Ship default presets: `hires`, `retro`, `dark`, `webcam`
+
+### Streaming WebSocket Mode
+
+Pipe terminal-rendered ASCII over a WebSocket for remote viewing.
+
+**Approach:**
+- `--ws <port>` starts a WebSocket server
+- Streams ANSI escape sequences or structured JSON grid data
+- Browser client connects and renders in a `<pre>` or canvas
+- Useful for remote monitoring, sharing renders without screen sharing
+
+### SIXEL Output
+
+For terminals that support SIXEL graphics (kitty, WezTerm, mlterm), render pixel-perfect glyph output inline.
+
+**Approach:**
+- Detect SIXEL support via `$TERM` or device attributes query
+- Render the same PPM pixel buffer used by `--pipe-ppm`
+- Encode as SIXEL escape sequence and write to stdout
+- Gives crisp rendered output without leaving the terminal
+
+**Flag:** `--sixel` or auto-detected.
+
+---
+
+## Design Notes
+
+### GPU / Shader Considerations
+
+The computation pipeline workload is too small for GPU acceleration. A 120x40 grid is 4,800 cells — GPUs need millions of work items to amortize kernel launch overhead. At 0.69ms/frame on CPU, a GPU path would spend more time on dispatch and data transfer than actual computation.
+
+The GPU is used only for rendering (WebGL font-atlas shader), where it handles millions of output pixels efficiently.
+
+### Performance Characteristics
+
+| Platform | Grid size | Throughput |
+|----------|-----------|-----------|
+| CLI video (M3 Pro, OpenMP) | 120x40 | 1,000+ fps (bottleneck: terminal I/O) |
+| WASM (Chrome, single-thread) | 120x40 | 200-400 fps |
+| WASM + WebGL rendering | 120x40 | 1,000+ fps (GPU-rendered output) |
+
+| Metric | Value |
+|--------|-------|
+| Pipeline (lightness + vectors + contrast + match) | ~1.0 ms/frame |
+| Render (diff-based ANSI) | ~0.17 ms/frame |
+| Terminal parsing (bottleneck) | ~35 ms/frame |
+| PPM pipe render | ~18 ms/frame |

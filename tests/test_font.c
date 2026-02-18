@@ -30,7 +30,7 @@ UTEST(font, create_fails_with_nonexistent_font) {
 
 UTEST(font, create_fails_with_invalid_font_data) {
     /* Create a temporary file with garbage data */
-    FILE *f = fopen("/tmp/ascii3d_test_badfont.ttf", "wb");
+    FILE *f = fopen("/tmp/glif_test_badfont.ttf", "wb");
     ASSERT_TRUE(f != NULL);
     const char *garbage = "this is not a valid font file at all";
     fwrite(garbage, 1, strlen(garbage), f);
@@ -40,10 +40,10 @@ UTEST(font, create_fails_with_invalid_font_data) {
     sampling_config_init(&sc);
 
     CharDatabase db;
-    int ret = char_db_create(&db, "/tmp/ascii3d_test_badfont.ttf", 10, 20, &sc);
+    int ret = char_db_create(&db, "/tmp/glif_test_badfont.ttf", 10, 20, &sc);
     ASSERT_NE(ret, 0);
 
-    remove("/tmp/ascii3d_test_badfont.ttf");
+    remove("/tmp/glif_test_badfont.ttf");
 }
 
 UTEST(font, space_has_zero_shape_vector) {
@@ -88,7 +88,7 @@ UTEST(font, nonspace_chars_have_nonzero_shapes) {
     char_db_free(&db);
 }
 
-UTEST(font, all_shape_vectors_normalized) {
+UTEST(font, all_shape_vectors_component_normalized) {
     SamplingConfig sc;
     sampling_config_init(&sc);
 
@@ -96,12 +96,19 @@ UTEST(font, all_shape_vectors_normalized) {
     int ret = char_db_create(&db, "fonts/SFNSMono.ttf", 10, 20, &sc);
     if (ret != 0) return;
 
+    /* Per-component max normalization: each dimension's max across all
+     * characters should be ~1.0. Components are in [0, 1]. */
+    float comp_max[NUM_INTERNAL] = {0};
     for (int i = 0; i < CHAR_COUNT; i++) {
-        float len = vec6_length(db.entries[i].shape);
-        /* Either zero (space or missing glyph) or normalized to ~1.0 */
-        if (len > 1e-6f) {
-            ASSERT_NEAR(len, 1.0f, 0.01f);
+        for (int s = 0; s < NUM_INTERNAL; s++) {
+            if (db.entries[i].shape.v[s] > comp_max[s])
+                comp_max[s] = db.entries[i].shape.v[s];
+            ASSERT_GE(db.entries[i].shape.v[s], 0.0f);
+            ASSERT_LE(db.entries[i].shape.v[s], 1.001f);
         }
+    }
+    for (int s = 0; s < NUM_INTERNAL; s++) {
+        ASSERT_NEAR(comp_max[s], 1.0f, 0.01f);
     }
 
     char_db_free(&db);

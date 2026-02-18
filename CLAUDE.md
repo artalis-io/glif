@@ -1,9 +1,9 @@
-# ASCII3D — Development Guide
+# Glif — Development Guide
 
 ## Build
 
 ```bash
-make          # build ascii3d binary
+make          # build glif binary
 make clean    # remove build artifacts
 make test     # build and run unit tests
 ```

@@ -162,6 +162,64 @@ UTEST(image, lightness_pure_green) {
     free(img.pixels);
 }
 
+UTEST(image, load_buffer_rgb) {
+    /* Create a 4x4 RGB buffer */
+    uint8_t pixels[4 * 4 * 3];
+    memset(pixels, 128, sizeof(pixels));
+
+    Image img;
+    ASSERT_EQ(image_load_buffer(&img, pixels, 4, 4, 3), 0);
+    ASSERT_EQ(img.width, 4);
+    ASSERT_EQ(img.height, 4);
+    ASSERT_EQ(img.channels, 3);
+    ASSERT_EQ(img.owns_pixels, 0);
+    ASSERT_TRUE(img.pixels == pixels);
+
+    /* Lightness map should work on buffer-loaded images */
+    LightnessMap lm;
+    ASSERT_EQ(lightness_map_create(&lm, &img), 0);
+    for (int i = 0; i < lm.width * lm.height; i++) {
+        ASSERT_GE(lm.data[i], 0.0f);
+        ASSERT_LE(lm.data[i], 1.0f);
+    }
+    lightness_map_free(&lm);
+
+    /* image_free should not crash (does not free external buffer) */
+    image_free(&img);
+    ASSERT_TRUE(img.pixels == NULL);
+}
+
+UTEST(image, load_buffer_rgba) {
+    uint8_t pixels[2 * 2 * 4];
+    for (int i = 0; i < 2 * 2; i++) {
+        pixels[i * 4 + 0] = 255;  /* R */
+        pixels[i * 4 + 1] = 0;    /* G */
+        pixels[i * 4 + 2] = 0;    /* B */
+        pixels[i * 4 + 3] = 255;  /* A */
+    }
+
+    Image img;
+    ASSERT_EQ(image_load_buffer(&img, pixels, 2, 2, 4), 0);
+    ASSERT_EQ(img.channels, 4);
+
+    LightnessMap lm;
+    ASSERT_EQ(lightness_map_create(&lm, &img), 0);
+    /* Pure red luminance = 0.2126 (same as RGB test) */
+    for (int i = 0; i < lm.width * lm.height; i++) {
+        ASSERT_NEAR(lm.data[i], 0.2126f, 0.01f);
+    }
+    lightness_map_free(&lm);
+    image_free(&img);
+}
+
+UTEST(image, load_buffer_rejects_invalid) {
+    uint8_t pixels[12];
+    Image img;
+    ASSERT_NE(image_load_buffer(&img, NULL, 2, 2, 3), 0);
+    ASSERT_NE(image_load_buffer(&img, pixels, 0, 2, 3), 0);
+    ASSERT_NE(image_load_buffer(&img, pixels, 2, 2, 2), 0);
+}
+
 UTEST(image, free_nullifies_pointer) {
     Image img;
     ASSERT_EQ(image_load(&img, "images/gradient.png"), 0);
