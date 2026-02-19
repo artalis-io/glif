@@ -7,7 +7,7 @@
 #define BITS_PER 5
 #define LEVELS (1 << BITS_PER)  /* 32 */
 
-int match_cache_init(MatchCache *mc) {
+int glif_match_cache_init(GlifMatchCache *mc) {
     mc->cache_size = CACHE_SIZE;
     mc->cache = calloc((size_t)CACHE_SIZE, 1);
     if (!mc->cache) {
@@ -17,7 +17,7 @@ int match_cache_init(MatchCache *mc) {
     return 0;
 }
 
-static unsigned int quantize_key(const Vec6 *v) {
+static unsigned int quantize_key(const GlifVec6 *v) {
     unsigned int key = 0;
     for (int i = 0; i < 6; i++) {
         float clamped = v->v[i];
@@ -29,12 +29,12 @@ static unsigned int quantize_key(const Vec6 *v) {
     return key % CACHE_SIZE;
 }
 
-static char brute_force_match(const Vec6 *shape, const CharDatabase *db) {
+static char brute_force_match(const GlifVec6 *shape, const GlifCharDatabase *db) {
     float best_dist = 1e30f;
     char best_ch = ' ';
 
-    for (int i = 0; i < CHAR_COUNT; i++) {
-        float d = vec6_dist_sq(*shape, db->entries[i].shape);
+    for (int i = 0; i < GLIF_CHAR_COUNT; i++) {
+        float d = glif_vec6_dist_sq(*shape, db->entries[i].shape);
         if (d < best_dist) {
             best_dist = d;
             best_ch = db->entries[i].ch;
@@ -43,7 +43,7 @@ static char brute_force_match(const Vec6 *shape, const CharDatabase *db) {
     return best_ch;
 }
 
-char match_find(const Vec6 *shape, const CharDatabase *db, MatchCache *mc) {
+char glif_match_find(const GlifVec6 *shape, const GlifCharDatabase *db, GlifMatchCache *mc) {
     if (mc && mc->cache) {
         unsigned int key = quantize_key(shape);
         if (mc->cache[key] != 0) {
@@ -56,17 +56,17 @@ char match_find(const Vec6 *shape, const CharDatabase *db, MatchCache *mc) {
     return brute_force_match(shape, db);
 }
 
-void match_grid(Grid *grid, const CharDatabase *db) {
+void glif_match_grid(GlifGrid *grid, const GlifCharDatabase *db) {
     int ncells = grid->rows * grid->cols;
-    GridCell *cells = grid->cells;
+    GlifGridCell *cells = grid->cells;
 
 #ifdef _OPENMP
     #pragma omp parallel
 #endif
     {
         /* Per-thread cache to avoid data races */
-        MatchCache mc;
-        if (match_cache_init(&mc) != 0) {
+        GlifMatchCache mc;
+        if (glif_match_cache_init(&mc) != 0) {
             mc.cache = NULL;
             mc.cache_size = 0;
         }
@@ -75,14 +75,14 @@ void match_grid(Grid *grid, const CharDatabase *db) {
         #pragma omp for schedule(static)
 #endif
         for (int i = 0; i < ncells; i++) {
-            cells[i].ch = match_find(&cells[i].shape, db, &mc);
+            cells[i].ch = glif_match_find(&cells[i].shape, db, &mc);
         }
 
-        match_cache_free(&mc);
+        glif_match_cache_free(&mc);
     }
 }
 
-void match_cache_free(MatchCache *mc) {
+void glif_match_cache_free(GlifMatchCache *mc) {
     if (!mc) return;
     free(mc->cache);
     mc->cache = NULL;

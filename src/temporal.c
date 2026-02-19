@@ -25,15 +25,15 @@ static float quickselect(float *arr, int n, int k) {
     return arr[k];
 }
 
-/* ── A. NormSmoother ── */
+/* ── A. GlifNormSmoother ── */
 
-void norm_smoother_init(NormSmoother *ns) {
+void glif_norm_smoother_init(GlifNormSmoother *ns) {
     ns->smooth_p5 = 0.0f;
     ns->smooth_p95 = 0.0f;
     ns->ready = 0;
 }
 
-void norm_smoother_apply(NormSmoother *ns, LightnessMap *lm, float alpha) {
+void glif_norm_smoother_apply(GlifNormSmoother *ns, GlifLightnessMap *lm, float alpha) {
     size_t n = (size_t)lm->width * (size_t)lm->height;
     if (n < 2) return;
 
@@ -71,24 +71,24 @@ void norm_smoother_apply(NormSmoother *ns, LightnessMap *lm, float alpha) {
     }
 }
 
-/* ── B. ShapeSmoother ── */
+/* ── B. GlifShapeSmoother ── */
 
-void shape_smoother_init(ShapeSmoother *ss) {
+void glif_shape_smoother_init(GlifShapeSmoother *ss) {
     ss->prev_shapes = NULL;
     ss->prev_externals = NULL;
     ss->count = 0;
     ss->ready = 0;
 }
 
-void shape_smoother_apply(ShapeSmoother *ss, Grid *grid, float alpha) {
+void glif_shape_smoother_apply(GlifShapeSmoother *ss, GlifGrid *grid, float alpha) {
     int n = grid->rows * grid->cols;
 
     /* Reset on grid size change */
     if (n != ss->count) {
         free(ss->prev_shapes);
         free(ss->prev_externals);
-        ss->prev_shapes = calloc((size_t)n, sizeof(Vec6));
-        ss->prev_externals = calloc((size_t)n, sizeof(Vec10));
+        ss->prev_shapes = calloc((size_t)n, sizeof(GlifVec6));
+        ss->prev_externals = calloc((size_t)n, sizeof(GlifVec10));
         if (!ss->prev_shapes || !ss->prev_externals) {
             free(ss->prev_shapes);
             free(ss->prev_externals);
@@ -115,8 +115,8 @@ void shape_smoother_apply(ShapeSmoother *ss, Grid *grid, float alpha) {
     /* Blend current with previous via EMA */
     float beta = 1.0f - alpha;
     for (int i = 0; i < n; i++) {
-        Vec6 blended = vec6_add(vec6_scale(grid->cells[i].shape, alpha),
-                                vec6_scale(ss->prev_shapes[i], beta));
+        GlifVec6 blended = glif_vec6_add(glif_vec6_scale(grid->cells[i].shape, alpha),
+                                glif_vec6_scale(ss->prev_shapes[i], beta));
         grid->cells[i].shape = blended;
         ss->prev_shapes[i] = blended;
 
@@ -129,7 +129,7 @@ void shape_smoother_apply(ShapeSmoother *ss, Grid *grid, float alpha) {
     }
 }
 
-void shape_smoother_free(ShapeSmoother *ss) {
+void glif_shape_smoother_free(GlifShapeSmoother *ss) {
     free(ss->prev_shapes);
     free(ss->prev_externals);
     ss->prev_shapes = NULL;
@@ -138,16 +138,16 @@ void shape_smoother_free(ShapeSmoother *ss) {
     ss->ready = 0;
 }
 
-/* ── C. ContrastSmoother ── */
+/* ── C. GlifContrastSmoother ── */
 
-void contrast_smoother_init(ContrastSmoother *cs) {
+void glif_contrast_smoother_init(GlifContrastSmoother *cs) {
     cs->smooth_p10 = 0.0f;
     cs->smooth_p90 = 0.0f;
     cs->smooth_avg = 0.0f;
     cs->ready = 0;
 }
 
-void contrast_smoother_apply(ContrastSmoother *cs, AdaptiveContrast *ac,
+void glif_contrast_smoother_apply(GlifContrastSmoother *cs, GlifAdaptiveContrast *ac,
                              float alpha) {
     if (!cs->ready) {
         cs->smooth_p10 = ac->frame_p10;
@@ -167,16 +167,16 @@ void contrast_smoother_apply(ContrastSmoother *cs, AdaptiveContrast *ac,
     ac->frame_avg = cs->smooth_avg;
 }
 
-/* ── D. MatchSmoother ── */
+/* ── D. GlifMatchSmoother ── */
 
-void match_smoother_init(MatchSmoother *ms) {
+void glif_match_smoother_init(GlifMatchSmoother *ms) {
     ms->prev_chars = NULL;
     ms->count = 0;
     ms->ready = 0;
 }
 
-void match_smoother_apply(MatchSmoother *ms, Grid *grid,
-                          const CharDatabase *db, float hysteresis) {
+void glif_match_smoother_apply(GlifMatchSmoother *ms, GlifGrid *grid,
+                          const GlifCharDatabase *db, float hysteresis) {
     int n = grid->rows * grid->cols;
 
     /* Reset on grid size change */
@@ -186,7 +186,7 @@ void match_smoother_apply(MatchSmoother *ms, Grid *grid,
         if (!ms->prev_chars) {
             ms->count = 0;
             ms->ready = 0;
-            match_grid(grid, db);
+            glif_match_grid(grid, db);
             return;
         }
         ms->count = n;
@@ -195,7 +195,7 @@ void match_smoother_apply(MatchSmoother *ms, Grid *grid,
 
     if (!ms->ready) {
         /* First frame: normal best-match */
-        match_grid(grid, db);
+        glif_match_grid(grid, db);
         for (int i = 0; i < n; i++)
             ms->prev_chars[i] = grid->cells[i].ch;
         ms->ready = 1;
@@ -204,14 +204,14 @@ void match_smoother_apply(MatchSmoother *ms, Grid *grid,
 
     /* Find best match per cell with hysteresis */
     float threshold = 1.0f - hysteresis;
-    MatchCache mc;
-    if (match_cache_init(&mc) != 0) {
+    GlifMatchCache mc;
+    if (glif_match_cache_init(&mc) != 0) {
         mc.cache = NULL;
         mc.cache_size = 0;
     }
 
     for (int i = 0; i < n; i++) {
-        char new_ch = match_find(&grid->cells[i].shape, db, &mc);
+        char new_ch = glif_match_find(&grid->cells[i].shape, db, &mc);
         char prev_ch = ms->prev_chars[i];
 
         if (new_ch == prev_ch) {
@@ -219,16 +219,16 @@ void match_smoother_apply(MatchSmoother *ms, Grid *grid,
             continue;
         }
 
-        int prev_idx = prev_ch - CHAR_FIRST;
-        if (prev_idx < 0 || prev_idx >= CHAR_COUNT) {
+        int prev_idx = prev_ch - GLIF_CHAR_FIRST;
+        if (prev_idx < 0 || prev_idx >= GLIF_CHAR_COUNT) {
             grid->cells[i].ch = new_ch;
             ms->prev_chars[i] = new_ch;
             continue;
         }
 
-        float dist_new = vec6_dist_sq(grid->cells[i].shape,
-                                      db->entries[new_ch - CHAR_FIRST].shape);
-        float dist_prev = vec6_dist_sq(grid->cells[i].shape,
+        float dist_new = glif_vec6_dist_sq(grid->cells[i].shape,
+                                      db->entries[new_ch - GLIF_CHAR_FIRST].shape);
+        float dist_prev = glif_vec6_dist_sq(grid->cells[i].shape,
                                        db->entries[prev_idx].shape);
 
         if (dist_new < dist_prev * threshold) {
@@ -239,10 +239,10 @@ void match_smoother_apply(MatchSmoother *ms, Grid *grid,
         }
     }
 
-    match_cache_free(&mc);
+    glif_match_cache_free(&mc);
 }
 
-void match_smoother_free(MatchSmoother *ms) {
+void glif_match_smoother_free(GlifMatchSmoother *ms) {
     free(ms->prev_chars);
     ms->prev_chars = NULL;
     ms->count = 0;

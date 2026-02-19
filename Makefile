@@ -144,6 +144,29 @@ WASM_EXT_SRC = $(CORE_SRC) src/platform/wasm/ext.c
 WASM_EXT_EXPORTS = '_ext_init','_ext_resize','_ext_frame','_ext_render', \
                    '_ext_set_params','_ext_set_hires','_malloc','_free'
 
+# Shared library
+ifeq ($(UNAME_S),Darwin)
+  SHARED_LIB = libglif.dylib
+  SHARED_FLAGS = -dynamiclib -install_name @rpath/$(SHARED_LIB)
+else
+  SHARED_LIB = libglif.so
+  SHARED_FLAGS = -shared
+endif
+
+LIB_PIC_OBJ = $(LIB_OBJ:.o=.pic.o)
+
+src/%.pic.o: src/%.c
+	$(CC) $(CFLAGS) -fPIC -c -o $@ $<
+
+src/platform/linux/%.pic.o: src/platform/linux/%.c
+	$(CC) $(CFLAGS) -fPIC -c -o $@ $<
+
+$(SHARED_LIB): $(LIB_PIC_OBJ)
+	$(CC) $(SHARED_FLAGS) -o $@ $^ $(LDFLAGS)
+
+.PHONY: shared
+shared: $(SHARED_LIB)
+
 wasm-ext: $(WASM_EXT_SRC)
 	@mkdir -p extension/wasm
 	emcc -std=gnu11 -O2 -msimd128 -Ivendor -Isrc \
@@ -157,6 +180,7 @@ wasm-ext: $(WASM_EXT_SRC)
 
 clean:
 	rm -f $(OBJ) $(BIN) $(TESTS)
-	rm -f src/platform/linux/*.o src/platform/wasm/*.o
+	rm -f src/*.pic.o src/platform/linux/*.o src/platform/linux/*.pic.o src/platform/wasm/*.o
+	rm -f libglif.so libglif.dylib
 
-.PHONY: all clean test debug wasm wasm-ext
+.PHONY: all clean test debug wasm wasm-ext shared

@@ -37,7 +37,7 @@ typedef struct {
     int pipe_raw;  /* video: write raw RGB24 frames to stdout (no headers) */
     const char *glif_path; /* video: write .glif binary file */
     const char *v4l2_device; /* video: write to v4l2loopback device (Linux) */
-    AdaptiveContrast adaptive; /* adaptive contrast params */
+    GlifAdaptiveContrast adaptive; /* adaptive contrast params */
 } Config;
 
 static void usage(const char *prog) {
@@ -247,8 +247,8 @@ static double time_now(void) {
 
 static int run_image(Config *cfg) {
     /* 1. Load image */
-    Image img;
-    if (image_load(&img, cfg->input_path) != 0)
+    GlifImage img;
+    if (glif_image_load(&img, cfg->input_path) != 0)
         return 1;
 
 #ifndef __EMSCRIPTEN__
@@ -270,59 +270,59 @@ static int run_image(Config *cfg) {
 #endif
 
     /* 2. Compute lightness map */
-    LightnessMap lm = { .data = NULL };
-    if (lightness_map_create(&lm, &img) != 0) {
+    GlifLightnessMap lm = { .data = NULL };
+    if (glif_lightness_map_create(&lm, &img) != 0) {
         fprintf(stderr, "error: failed to create lightness map\n");
-        image_free(&img);
+        glif_image_free(&img);
         return 1;
     }
 
     /* 3. Init sampling geometry */
-    SamplingConfig sc;
-    sampling_config_init(&sc);
+    GlifSamplingConfig sc;
+    glif_sampling_config_init(&sc);
 
-    PrecomputedMasks pm;
-    if (sampling_precompute(&pm, &sc, cfg->cell_w, cfg->cell_h, lm.width) != 0) {
+    GlifPrecomputedMasks pm;
+    if (glif_sampling_precompute(&pm, &sc, cfg->cell_w, cfg->cell_h, lm.width) != 0) {
         fprintf(stderr, "error: failed to precompute sampling masks\n");
-        lightness_map_free(&lm);
-        image_free(&img);
+        glif_lightness_map_free(&lm);
+        glif_image_free(&img);
         return 1;
     }
 
     /* 4. Load font + precompute character shape vectors */
-    CharDatabase db;
-    if (char_db_create(&db, cfg->font_path, cfg->cell_w, cfg->cell_h, &sc) != 0) {
-        sampling_precompute_free(&pm);
-        lightness_map_free(&lm);
-        image_free(&img);
+    GlifCharDatabase db;
+    if (glif_char_db_create(&db, cfg->font_path, cfg->cell_w, cfg->cell_h, &sc) != 0) {
+        glif_sampling_precompute_free(&pm);
+        glif_lightness_map_free(&lm);
+        glif_image_free(&img);
         return 1;
     }
 
     /* 5. Create grid */
-    Grid grid;
-    if (grid_create(&grid, &img, cfg->cell_w, cfg->cell_h) != 0) {
+    GlifGrid grid;
+    if (glif_grid_create(&grid, &img, cfg->cell_w, cfg->cell_h) != 0) {
         fprintf(stderr, "error: image too small for cell size %dx%d\n",
                 cfg->cell_w, cfg->cell_h);
-        char_db_free(&db);
-        sampling_precompute_free(&pm);
-        lightness_map_free(&lm);
-        image_free(&img);
+        glif_char_db_free(&db);
+        glif_sampling_precompute_free(&pm);
+        glif_lightness_map_free(&lm);
+        glif_image_free(&img);
         return 1;
     }
 
     /* 6–10. Pipeline */
     if (cfg->adaptive.floor >= 0.0f)
-        lightness_map_normalize(&lm);
-    grid_compute_vectors_fast(&grid, &lm, &pm);
-    grid_compute_colors(&grid, &img);
-    contrast_analyze_frame(&cfg->adaptive, &grid);
-    contrast_directional(&grid, &sc, cfg->dir_crunch, &cfg->adaptive);
-    contrast_global(&grid, cfg->global_crunch, &cfg->adaptive);
-    match_grid(&grid, &db);
+        glif_lightness_map_normalize(&lm);
+    glif_grid_compute_vectors_fast(&grid, &lm, &pm);
+    glif_grid_compute_colors(&grid, &img);
+    glif_contrast_analyze_frame(&cfg->adaptive, &grid);
+    glif_contrast_directional(&grid, &sc, cfg->dir_crunch, &cfg->adaptive);
+    glif_contrast_global(&grid, cfg->global_crunch, &cfg->adaptive);
+    glif_match_grid(&grid, &db);
 
     /* 11. Output */
     if (cfg->output_path) {
-        if (output_ppm(&grid, &db, cfg->output_path, cfg->scale, cfg->dark_mode) != 0) {
+        if (glif_output_ppm(&grid, &db, cfg->output_path, cfg->scale, cfg->dark_mode) != 0) {
             fprintf(stderr, "error: failed to write PPM file\n");
         } else {
             fprintf(stderr, "Wrote %s (%zux%zu)\n", cfg->output_path,
@@ -330,16 +330,16 @@ static int run_image(Config *cfg) {
                     (size_t)grid.rows * (size_t)cfg->cell_h * (size_t)cfg->scale);
         }
     } else if (cfg->color) {
-        output_ansi(&grid);
+        glif_output_ansi(&grid);
     } else {
-        output_plain(&grid);
+        glif_output_plain(&grid);
     }
 
-    grid_free(&grid);
-    char_db_free(&db);
-    sampling_precompute_free(&pm);
-    lightness_map_free(&lm);
-    image_free(&img);
+    glif_grid_free(&grid);
+    glif_char_db_free(&db);
+    glif_sampling_precompute_free(&pm);
+    glif_lightness_map_free(&lm);
+    glif_image_free(&img);
     return 0;
 }
 
@@ -365,58 +365,58 @@ static int run_video(Config *cfg) {
 #endif
 
     /* One-time init */
-    SamplingConfig sc;
-    sampling_config_init(&sc);
+    GlifSamplingConfig sc;
+    glif_sampling_config_init(&sc);
 
-    PrecomputedMasks pm;
-    if (sampling_precompute(&pm, &sc, cfg->cell_w, cfg->cell_h, w) != 0) {
+    GlifPrecomputedMasks pm;
+    if (glif_sampling_precompute(&pm, &sc, cfg->cell_w, cfg->cell_h, w) != 0) {
         fprintf(stderr, "error: failed to precompute sampling masks\n");
         return 1;
     }
 
-    CharDatabase db;
-    if (char_db_create(&db, cfg->font_path, cfg->cell_w, cfg->cell_h, &sc) != 0) {
-        sampling_precompute_free(&pm);
+    GlifCharDatabase db;
+    if (glif_char_db_create(&db, cfg->font_path, cfg->cell_w, cfg->cell_h, &sc) != 0) {
+        glif_sampling_precompute_free(&pm);
         return 1;
     }
 
     /* Allocate frame buffer and create grid */
     uint8_t *frame_buf = malloc(frame_size);
     if (!frame_buf) {
-        char_db_free(&db);
-        sampling_precompute_free(&pm);
+        glif_char_db_free(&db);
+        glif_sampling_precompute_free(&pm);
         return 1;
     }
 
-    Image img = { .width = w, .height = h, .channels = 3, .pixels = frame_buf, .owns_pixels = 0 };
-    Grid grid;
-    if (grid_create(&grid, &img, cfg->cell_w, cfg->cell_h) != 0) {
+    GlifImage img = { .width = w, .height = h, .channels = 3, .pixels = frame_buf, .owns_pixels = 0 };
+    GlifGrid grid;
+    if (glif_grid_create(&grid, &img, cfg->cell_w, cfg->cell_h) != 0) {
         fprintf(stderr, "error: video %dx%d too small for cell size %dx%d\n",
                 w, h, cfg->cell_w, cfg->cell_h);
         free(frame_buf);
-        char_db_free(&db);
-        sampling_precompute_free(&pm);
+        glif_char_db_free(&db);
+        glif_sampling_precompute_free(&pm);
         return 1;
     }
 
     /* Lightness map — allocated once, reused per frame */
-    LightnessMap lm;
+    GlifLightnessMap lm;
     lm.width = w;
     lm.height = h;
     size_t npix = (size_t)w * (size_t)h;
     if (npix > SIZE_MAX / sizeof(float)) {
-        grid_free(&grid);
+        glif_grid_free(&grid);
         free(frame_buf);
-        char_db_free(&db);
-        sampling_precompute_free(&pm);
+        glif_char_db_free(&db);
+        glif_sampling_precompute_free(&pm);
         return 1;
     }
     lm.data = malloc(npix * sizeof(float));
     if (!lm.data) {
-        grid_free(&grid);
+        glif_grid_free(&grid);
         free(frame_buf);
-        char_db_free(&db);
-        sampling_precompute_free(&pm);
+        glif_char_db_free(&db);
+        glif_sampling_precompute_free(&pm);
         return 1;
     }
 
@@ -427,8 +427,8 @@ static int run_video(Config *cfg) {
     int rows = grid.rows;
 
     /* Init renderers */
-    FrameDiff fd = {0};
-    PpmPipe pp = {0};
+    GlifFrameDiff fd = {0};
+    GlifPpmPipe pp = {0};
     GlifWriter gw = {0};
 #ifdef __linux__
     V4l2Output vo = {0};
@@ -438,32 +438,32 @@ static int run_video(Config *cfg) {
                              cfg->cell_w, cfg->cell_h,
                              cfg->fps, cfg->dark_mode) != 0) {
             free(lm.data);
-            grid_free(&grid);
+            glif_grid_free(&grid);
             free(frame_buf);
-            char_db_free(&db);
-            sampling_precompute_free(&pm);
+            glif_char_db_free(&db);
+            glif_sampling_precompute_free(&pm);
             return 1;
         }
     }
     int needs_ppm_pipe = cfg->pipe_ppm || cfg->pipe_raw || cfg->v4l2_device;
     if (needs_ppm_pipe) {
-        if (ppm_pipe_init(&pp, &grid, &db, cfg->scale, cfg->dark_mode) != 0) {
+        if (glif_ppm_pipe_init(&pp, &grid, &db, cfg->scale, cfg->dark_mode) != 0) {
             fprintf(stderr, "error: failed to allocate PPM pipe buffer\n");
             free(lm.data);
-            grid_free(&grid);
+            glif_grid_free(&grid);
             free(frame_buf);
-            char_db_free(&db);
-            sampling_precompute_free(&pm);
+            glif_char_db_free(&db);
+            glif_sampling_precompute_free(&pm);
             return 1;
         }
     } else if (cfg->color) {
-        if (frame_diff_init(&fd, rows, cols) != 0) {
+        if (glif_frame_diff_init(&fd, rows, cols) != 0) {
             fprintf(stderr, "error: failed to allocate diff buffer\n");
             free(lm.data);
-            grid_free(&grid);
+            glif_grid_free(&grid);
             free(frame_buf);
-            char_db_free(&db);
-            sampling_precompute_free(&pm);
+            glif_char_db_free(&db);
+            glif_sampling_precompute_free(&pm);
             return 1;
         }
     }
@@ -471,12 +471,12 @@ static int run_video(Config *cfg) {
     if (cfg->v4l2_device) {
         if (v4l2_output_init(&vo, cfg->v4l2_device,
                              (int)pp.img_w, (int)pp.img_h) != 0) {
-            ppm_pipe_free(&pp);
+            glif_ppm_pipe_free(&pp);
             free(lm.data);
-            grid_free(&grid);
+            glif_grid_free(&grid);
             free(frame_buf);
-            char_db_free(&db);
-            sampling_precompute_free(&pm);
+            glif_char_db_free(&db);
+            glif_sampling_precompute_free(&pm);
             return 1;
         }
     }
@@ -507,17 +507,17 @@ static int run_video(Config *cfg) {
 #endif
 
         /* Recompute lightness map in-place */
-        if (lightness_map_update(&lm, &img) != 0) break;
+        if (glif_lightness_map_update(&lm, &img) != 0) break;
         if (cfg->adaptive.floor >= 0.0f)
-            lightness_map_normalize(&lm);
+            glif_lightness_map_normalize(&lm);
 
         /* Pipeline */
-        grid_compute_vectors_fast(&grid, &lm, &pm);
-        grid_compute_colors(&grid, &img);
-        contrast_analyze_frame(&cfg->adaptive, &grid);
-        contrast_directional(&grid, &sc, cfg->dir_crunch, &cfg->adaptive);
-        contrast_global(&grid, cfg->global_crunch, &cfg->adaptive);
-        match_grid(&grid, &db);
+        glif_grid_compute_vectors_fast(&grid, &lm, &pm);
+        glif_grid_compute_colors(&grid, &img);
+        glif_contrast_analyze_frame(&cfg->adaptive, &grid);
+        glif_contrast_directional(&grid, &sc, cfg->dir_crunch, &cfg->adaptive);
+        glif_contrast_global(&grid, cfg->global_crunch, &cfg->adaptive);
+        glif_match_grid(&grid, &db);
 
 #ifndef __EMSCRIPTEN__
         double t_render_start = time_now();
@@ -528,19 +528,19 @@ static int run_video(Config *cfg) {
         if (gw.file) glif_writer_frame(&gw, &grid);
 
         if (cfg->v4l2_device) {
-            ppm_pipe_render(&pp, &grid, &db);
+            glif_ppm_pipe_render(&pp, &grid, &db);
 #ifdef __linux__
             v4l2_output_frame(&vo, pp.pixels);
 #endif
         } else if (cfg->pipe_raw) {
-            raw_pipe_frame(&pp, &grid, &db);
+            glif_raw_pipe_frame(&pp, &grid, &db);
         } else if (cfg->pipe_ppm) {
-            ppm_pipe_frame(&pp, &grid, &db);
+            glif_ppm_pipe_frame(&pp, &grid, &db);
         } else if (cfg->color) {
-            frame_diff_render(&fd, &grid, cfg->dark_mode);
+            glif_frame_diff_render(&fd, &grid, cfg->dark_mode);
         } else if (!cfg->glif_path) {
             printf("\033[H");
-            output_plain(&grid);
+            glif_output_plain(&grid);
             fflush(stdout);
         }
 
@@ -593,14 +593,14 @@ static int run_video(Config *cfg) {
 #ifdef __linux__
     if (cfg->v4l2_device) v4l2_output_free(&vo);
 #endif
-    ppm_pipe_free(&pp);
-    frame_diff_free(&fd);
+    glif_ppm_pipe_free(&pp);
+    glif_frame_diff_free(&fd);
     free(lm.data);
     lm.data = NULL;
-    grid_free(&grid);
+    glif_grid_free(&grid);
     free(frame_buf);
-    char_db_free(&db);
-    sampling_precompute_free(&pm);
+    glif_char_db_free(&db);
+    glif_sampling_precompute_free(&pm);
     return 0;
 }
 

@@ -1,32 +1,32 @@
-#ifndef SAMPLING_H
-#define SAMPLING_H
+#ifndef GLIF_SAMPLING_H
+#define GLIF_SAMPLING_H
 
 #include "vec6.h"
 #include "image.h"
 
-#define NUM_INTERNAL 6
-#define NUM_EXTERNAL 10
-#define MAX_AFFECTING 4
+#define GLIF_NUM_INTERNAL 6
+#define GLIF_NUM_EXTERNAL 10
+#define GLIF_MAX_AFFECTING 4
 
 typedef struct {
     float cx; /* center x, normalized 0–1 within cell */
     float cy; /* center y, normalized 0–1 within cell */
     float r;  /* radius, normalized to cell width */
-} SamplingCircle;
+} GlifSamplingCircle;
 
 typedef struct {
-    SamplingCircle internal[NUM_INTERNAL];
-    SamplingCircle external[NUM_EXTERNAL];
+    GlifSamplingCircle internal[GLIF_NUM_INTERNAL];
+    GlifSamplingCircle external[GLIF_NUM_EXTERNAL];
     /* For each internal circle: which external circles affect it */
-    int affecting[NUM_INTERNAL][MAX_AFFECTING];
-    int affecting_count[NUM_INTERNAL];
-} SamplingConfig;
+    int affecting[GLIF_NUM_INTERNAL][GLIF_MAX_AFFECTING];
+    int affecting_count[GLIF_NUM_INTERNAL];
+} GlifSamplingConfig;
 
 /* Initialize the standard sampling circle layout. */
-void sampling_config_init(SamplingConfig *sc);
+void glif_sampling_config_init(GlifSamplingConfig *sc);
 
 /* Average lightness within a circle centered at pixel (cx_px, cy_px) with radius r_px. */
-float sampling_circle_average(const LightnessMap *lm, float cx_px, float cy_px, float r_px);
+float glif_sampling_circle_average(const GlifLightnessMap *lm, float cx_px, float cy_px, float r_px);
 
 /* Precomputed circle mask: array of row-major index offsets from cell origin */
 typedef struct {
@@ -37,18 +37,18 @@ typedef struct {
     int max_dx;
     int min_dy;
     int max_dy;
-} CircleMask;
+} GlifCircleMask;
 
-#define NUM_CIRCLES (NUM_INTERNAL + NUM_EXTERNAL)
+#define GLIF_NUM_CIRCLES (GLIF_NUM_INTERNAL + GLIF_NUM_EXTERNAL)
 
 typedef struct {
-    CircleMask masks[NUM_CIRCLES]; /* 0..5 = internal, 6..15 = external */
+    GlifCircleMask masks[GLIF_NUM_CIRCLES]; /* 0..5 = internal, 6..15 = external */
     int stride;                     /* lm->width (row stride) */
-} PrecomputedMasks;
+} GlifPrecomputedMasks;
 
 /* Precompute circle pixel masks for given cell size and image stride. */
-int sampling_precompute(PrecomputedMasks *pm, const SamplingConfig *sc,
+int glif_sampling_precompute(GlifPrecomputedMasks *pm, const GlifSamplingConfig *sc,
                         int cell_w, int cell_h, int stride);
-void sampling_precompute_free(PrecomputedMasks *pm);
+void glif_sampling_precompute_free(GlifPrecomputedMasks *pm);
 
 #endif

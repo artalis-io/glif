@@ -3,8 +3,7 @@
   "name": "Glif — ASCII Video",
   "description": "Real-time ASCII art overlay for any video",
   "version": "1.0.0",
-  "permissions": ["scripting", "storage"],
-  "host_permissions": ["<all_urls>"],
+  "permissions": ["activeTab", "scripting", "storage"],
   "background": {
     "service_worker": "background.js"
   },

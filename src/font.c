@@ -62,7 +62,7 @@ static float glyph_circle_average(const uint8_t *bitmap, int bw, int bh,
 }
 
 /* Shared init: rasterize glyphs + compute shape vectors. db->font_data must be set. */
-static int char_db_init_from_font(CharDatabase *db, const SamplingConfig *sc) {
+static int char_db_init_from_font(GlifCharDatabase *db, const GlifSamplingConfig *sc) {
     int cell_w = db->cell_w;
     int cell_h = db->cell_h;
 
@@ -77,26 +77,26 @@ static int char_db_init_from_font(CharDatabase *db, const SamplingConfig *sc) {
     float scale = stbtt_ScaleForPixelHeight(&font, (float)cell_h);
 
     /* Rasterize each printable ASCII character */
-    for (int i = 0; i < CHAR_COUNT; i++) {
-        char ch = (char)(CHAR_FIRST + i);
+    for (int i = 0; i < GLIF_CHAR_COUNT; i++) {
+        char ch = (char)(GLIF_CHAR_FIRST + i);
         db->entries[i].ch = ch;
 
         /* Allocate a blank bitmap for this cell */
         uint8_t *bmp = calloc((size_t)cell_w * (size_t)cell_h, 1);
         if (!bmp) {
-            char_db_free(db);
+            glif_char_db_free(db);
             return -1;
         }
         db->entries[i].bitmap = bmp;
 
         if (ch == ' ') {
-            db->entries[i].shape = vec6_zero();
+            db->entries[i].shape = glif_vec6_zero();
             continue;
         }
 
         int glyph = stbtt_FindGlyphIndex(&font, ch);
         if (glyph == 0) {
-            db->entries[i].shape = vec6_zero();
+            db->entries[i].shape = glif_vec6_zero();
             continue;
         }
 
@@ -105,7 +105,7 @@ static int char_db_init_from_font(CharDatabase *db, const SamplingConfig *sc) {
                                                     glyph, &gw, &gh,
                                                     &gx_off, &gy_off);
         if (!glyph_bmp) {
-            db->entries[i].shape = vec6_zero();
+            db->entries[i].shape = glif_vec6_zero();
             continue;
         }
 
@@ -131,10 +131,10 @@ static int char_db_init_from_font(CharDatabase *db, const SamplingConfig *sc) {
 
         stbtt_FreeBitmap(glyph_bmp, NULL);
 
-        Vec6 shape;
+        GlifVec6 shape;
         float cw = (float)cell_w;
         float ch_f = (float)cell_h;
-        for (int s = 0; s < NUM_INTERNAL; s++) {
+        for (int s = 0; s < GLIF_NUM_INTERNAL; s++) {
             float cx_px = sc->internal[s].cx * cw;
             float cy_px = sc->internal[s].cy * ch_f;
             float r_px  = sc->internal[s].r * cw;
@@ -146,15 +146,15 @@ static int char_db_init_from_font(CharDatabase *db, const SamplingConfig *sc) {
     }
 
     /* Per-component max normalization */
-    float comp_max[NUM_INTERNAL] = {0};
-    for (int i = 0; i < CHAR_COUNT; i++) {
-        for (int s = 0; s < NUM_INTERNAL; s++) {
+    float comp_max[GLIF_NUM_INTERNAL] = {0};
+    for (int i = 0; i < GLIF_CHAR_COUNT; i++) {
+        for (int s = 0; s < GLIF_NUM_INTERNAL; s++) {
             if (db->entries[i].shape.v[s] > comp_max[s])
                 comp_max[s] = db->entries[i].shape.v[s];
         }
     }
-    for (int i = 0; i < CHAR_COUNT; i++) {
-        for (int s = 0; s < NUM_INTERNAL; s++) {
+    for (int i = 0; i < GLIF_CHAR_COUNT; i++) {
+        for (int s = 0; s < GLIF_NUM_INTERNAL; s++) {
             if (comp_max[s] > 1e-8f)
                 db->entries[i].shape.v[s] /= comp_max[s];
         }
@@ -163,8 +163,8 @@ static int char_db_init_from_font(CharDatabase *db, const SamplingConfig *sc) {
     return 0;
 }
 
-int char_db_create(CharDatabase *db, const char *font_path,
-                   int cell_w, int cell_h, const SamplingConfig *sc) {
+int glif_char_db_create(GlifCharDatabase *db, const char *font_path,
+                   int cell_w, int cell_h, const GlifSamplingConfig *sc) {
     memset(db, 0, sizeof(*db));
     db->cell_w = cell_w;
     db->cell_h = cell_h;
@@ -184,9 +184,9 @@ int char_db_create(CharDatabase *db, const char *font_path,
     return 0;
 }
 
-int char_db_create_from_memory(CharDatabase *db, const unsigned char *font_data,
+int glif_char_db_create_from_memory(GlifCharDatabase *db, const unsigned char *font_data,
                                size_t font_len, int cell_w, int cell_h,
-                               const SamplingConfig *sc) {
+                               const GlifSamplingConfig *sc) {
     (void)font_len;
     memset(db, 0, sizeof(*db));
     db->cell_w = cell_w;
@@ -199,13 +199,13 @@ int char_db_create_from_memory(CharDatabase *db, const unsigned char *font_data,
     return 0;
 }
 
-uint8_t **char_db_render_bitmaps(const CharDatabase *db, int scale) {
+uint8_t **glif_char_db_render_bitmaps(const GlifCharDatabase *db, int scale) {
     if (scale < 1) scale = 1;
     if (scale > 64) scale = 64;
     int rw = db->cell_w * scale;
     int rh = db->cell_h * scale;
 
-    uint8_t **bitmaps = calloc(CHAR_COUNT, sizeof(uint8_t *));
+    uint8_t **bitmaps = calloc(GLIF_CHAR_COUNT, sizeof(uint8_t *));
     if (!bitmaps) return NULL;
 
     stbtt_fontinfo font;
@@ -220,11 +220,11 @@ uint8_t **char_db_render_bitmaps(const CharDatabase *db, int scale) {
     stbtt_GetFontVMetrics(&font, &ascent, &descent, &line_gap);
     int baseline = (int)(ascent * fscale);
 
-    for (int i = 0; i < CHAR_COUNT; i++) {
+    for (int i = 0; i < GLIF_CHAR_COUNT; i++) {
         bitmaps[i] = calloc((size_t)rw * (size_t)rh, 1);
         if (!bitmaps[i]) goto fail;
 
-        char ch = (char)(CHAR_FIRST + i);
+        char ch = (char)(GLIF_CHAR_FIRST + i);
         if (ch == ' ') continue;
 
         int glyph = stbtt_FindGlyphIndex(&font, ch);
@@ -255,13 +255,13 @@ uint8_t **char_db_render_bitmaps(const CharDatabase *db, int scale) {
     return bitmaps;
 
 fail:
-    for (int i = 0; i < CHAR_COUNT; i++) free(bitmaps[i]);
+    for (int i = 0; i < GLIF_CHAR_COUNT; i++) free(bitmaps[i]);
     free(bitmaps);
     return NULL;
 }
 
-void char_db_free(CharDatabase *db) {
-    for (int i = 0; i < CHAR_COUNT; i++) {
+void glif_char_db_free(GlifCharDatabase *db) {
+    for (int i = 0; i < GLIF_CHAR_COUNT; i++) {
         free(db->entries[i].bitmap);
         db->entries[i].bitmap = NULL;
     }

@@ -3,13 +3,13 @@
 #include <stdlib.h>
 #include <string.h>
 
-void sampling_config_init(SamplingConfig *sc) {
+void glif_sampling_config_init(GlifSamplingConfig *sc) {
     /* 6 internal circles in 3×2 staggered grid */
     float ix[] = {0.25f, 0.75f, 0.25f, 0.75f, 0.25f, 0.75f};
     float iy[] = {0.20f, 0.13f, 0.53f, 0.47f, 0.87f, 0.80f};
     float ir = 0.28f;
 
-    for (int i = 0; i < NUM_INTERNAL; i++) {
+    for (int i = 0; i < GLIF_NUM_INTERNAL; i++) {
         sc->internal[i].cx = ix[i];
         sc->internal[i].cy = iy[i];
         sc->internal[i].r  = ir;
@@ -24,7 +24,7 @@ void sampling_config_init(SamplingConfig *sc) {
     float ey[] = {-0.17f, -0.17f, -0.17f,  0.33f, 0.67f,  0.33f, 0.67f,  1.17f, 1.17f, 1.17f};
     float er = 0.28f;
 
-    for (int i = 0; i < NUM_EXTERNAL; i++) {
+    for (int i = 0; i < GLIF_NUM_EXTERNAL; i++) {
         sc->external[i].cx = ex[i];
         sc->external[i].cy = ey[i];
         sc->external[i].r  = er;
@@ -41,7 +41,7 @@ void sampling_config_init(SamplingConfig *sc) {
      * Internal 4 (bot-left):    ext 4(left-lower), 6(right-lower), 8(bot-mid), 9(bot-right)
      * Internal 5 (bot-right):   ext 5(right-upper), 7(bot-left), 8(bot-mid), 9(bot-right)
      */
-    int aff[NUM_INTERNAL][MAX_AFFECTING] = {
+    int aff[GLIF_NUM_INTERNAL][GLIF_MAX_AFFECTING] = {
         {0, 1, 2, 4},
         {0, 1, 3, 5},
         {2, 4, 6, -1},
@@ -51,14 +51,14 @@ void sampling_config_init(SamplingConfig *sc) {
     };
     int aff_count[] = {4, 4, 3, 3, 4, 4};
 
-    for (int i = 0; i < NUM_INTERNAL; i++) {
+    for (int i = 0; i < GLIF_NUM_INTERNAL; i++) {
         sc->affecting_count[i] = aff_count[i];
-        for (int j = 0; j < MAX_AFFECTING; j++)
+        for (int j = 0; j < GLIF_MAX_AFFECTING; j++)
             sc->affecting[i][j] = aff[i][j];
     }
 }
 
-float sampling_circle_average(const LightnessMap *lm,
+float glif_sampling_circle_average(const GlifLightnessMap *lm,
                               float cx_px, float cy_px, float r_px) {
     int x0 = (int)floorf(cx_px - r_px);
     int y0 = (int)floorf(cy_px - r_px);
@@ -88,10 +88,10 @@ float sampling_circle_average(const LightnessMap *lm,
     return count > 0 ? sum / (float)count : 0.0f;
 }
 
-/* Build a CircleMask for one circle: precompute all (dx, dy) pixel offsets
+/* Build a GlifCircleMask for one circle: precompute all (dx, dy) pixel offsets
  * relative to cell origin (0,0) that fall within the circle, then encode
  * as row-major index offsets (dy * stride + dx) for direct lm->data access. */
-static int build_mask(CircleMask *mask, float cx_norm, float cy_norm,
+static int build_mask(GlifCircleMask *mask, float cx_norm, float cy_norm,
                       float r_norm, int cell_w, int cell_h, int stride) {
     float cx_px = cx_norm * (float)cell_w;
     float cy_px = cy_norm * (float)cell_h;
@@ -143,19 +143,19 @@ static int build_mask(CircleMask *mask, float cx_norm, float cy_norm,
     return 0;
 }
 
-int sampling_precompute(PrecomputedMasks *pm, const SamplingConfig *sc,
+int glif_sampling_precompute(GlifPrecomputedMasks *pm, const GlifSamplingConfig *sc,
                         int cell_w, int cell_h, int stride) {
     memset(pm, 0, sizeof(*pm));
     pm->stride = stride;
 
-    for (int i = 0; i < NUM_INTERNAL; i++) {
+    for (int i = 0; i < GLIF_NUM_INTERNAL; i++) {
         if (build_mask(&pm->masks[i],
                        sc->internal[i].cx, sc->internal[i].cy, sc->internal[i].r,
                        cell_w, cell_h, stride) != 0)
             goto fail;
     }
-    for (int i = 0; i < NUM_EXTERNAL; i++) {
-        if (build_mask(&pm->masks[NUM_INTERNAL + i],
+    for (int i = 0; i < GLIF_NUM_EXTERNAL; i++) {
+        if (build_mask(&pm->masks[GLIF_NUM_INTERNAL + i],
                        sc->external[i].cx, sc->external[i].cy, sc->external[i].r,
                        cell_w, cell_h, stride) != 0)
             goto fail;
@@ -163,12 +163,12 @@ int sampling_precompute(PrecomputedMasks *pm, const SamplingConfig *sc,
     return 0;
 
 fail:
-    sampling_precompute_free(pm);
+    glif_sampling_precompute_free(pm);
     return -1;
 }
 
-void sampling_precompute_free(PrecomputedMasks *pm) {
-    for (int i = 0; i < NUM_CIRCLES; i++)
+void glif_sampling_precompute_free(GlifPrecomputedMasks *pm) {
+    for (int i = 0; i < GLIF_NUM_CIRCLES; i++)
         free(pm->masks[i].offsets);
     memset(pm, 0, sizeof(*pm));
 }

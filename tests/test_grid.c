@@ -6,27 +6,27 @@
 #include <string.h>
 
 UTEST(grid, create_dimensions) {
-    Image img;
-    ASSERT_EQ(image_load(&img, "images/gradient.png"), 0);
+    GlifImage img;
+    ASSERT_EQ(glif_image_load(&img, "images/gradient.png"), 0);
 
-    Grid grid;
-    ASSERT_EQ(grid_create(&grid, &img, 10, 20), 0);
+    GlifGrid grid;
+    ASSERT_EQ(glif_grid_create(&grid, &img, 10, 20), 0);
     ASSERT_EQ(grid.cols, 32);   /* 320 / 10 */
     ASSERT_EQ(grid.rows, 12);   /* 240 / 20 */
     ASSERT_EQ(grid.cell_w, 10);
     ASSERT_EQ(grid.cell_h, 20);
     ASSERT_TRUE(grid.cells != NULL);
 
-    grid_free(&grid);
-    image_free(&img);
+    glif_grid_free(&grid);
+    glif_image_free(&img);
 }
 
 UTEST(grid, cell_positions) {
-    Image img;
-    ASSERT_EQ(image_load(&img, "images/gradient.png"), 0);
+    GlifImage img;
+    ASSERT_EQ(glif_image_load(&img, "images/gradient.png"), 0);
 
-    Grid grid;
-    ASSERT_EQ(grid_create(&grid, &img, 10, 20), 0);
+    GlifGrid grid;
+    ASSERT_EQ(glif_grid_create(&grid, &img, 10, 20), 0);
 
     /* First cell should be at (0, 0) */
     ASSERT_EQ(grid.cells[0].px, 0);
@@ -40,94 +40,94 @@ UTEST(grid, cell_positions) {
     ASSERT_EQ(grid.cells[grid.cols].px, 0);
     ASSERT_EQ(grid.cells[grid.cols].py, 20);
 
-    grid_free(&grid);
-    image_free(&img);
+    glif_grid_free(&grid);
+    glif_image_free(&img);
 }
 
 UTEST(grid, too_small_image) {
-    Image img;
+    GlifImage img;
     img.width = 5;
     img.height = 5;
     img.channels = 3;
     img.pixels = NULL;
 
-    Grid grid;
+    GlifGrid grid;
     /* Cell size larger than image should fail */
-    ASSERT_NE(grid_create(&grid, &img, 10, 20), 0);
+    ASSERT_NE(glif_grid_create(&grid, &img, 10, 20), 0);
 }
 
 UTEST(grid, compute_vectors_runs) {
-    Image img;
-    ASSERT_EQ(image_load(&img, "images/checkerboard.png"), 0);
+    GlifImage img;
+    ASSERT_EQ(glif_image_load(&img, "images/checkerboard.png"), 0);
 
-    LightnessMap lm;
-    ASSERT_EQ(lightness_map_create(&lm, &img), 0);
+    GlifLightnessMap lm;
+    ASSERT_EQ(glif_lightness_map_create(&lm, &img), 0);
 
-    SamplingConfig sc;
-    sampling_config_init(&sc);
+    GlifSamplingConfig sc;
+    glif_sampling_config_init(&sc);
 
-    Grid grid;
-    ASSERT_EQ(grid_create(&grid, &img, 10, 20), 0);
-    grid_compute_vectors(&grid, &lm, &sc);
+    GlifGrid grid;
+    ASSERT_EQ(glif_grid_create(&grid, &img, 10, 20), 0);
+    glif_grid_compute_vectors(&grid, &lm, &sc);
 
     /* After computing vectors, shapes should not all be zero */
     int any_nonzero = 0;
     for (int i = 0; i < grid.rows * grid.cols; i++) {
-        if (vec6_length(grid.cells[i].shape) > 1e-6f) {
+        if (glif_vec6_length(grid.cells[i].shape) > 1e-6f) {
             any_nonzero = 1;
             break;
         }
     }
     ASSERT_TRUE(any_nonzero);
 
-    grid_free(&grid);
-    lightness_map_free(&lm);
-    image_free(&img);
+    glif_grid_free(&grid);
+    glif_lightness_map_free(&lm);
+    glif_image_free(&img);
 }
 
 UTEST(grid, compute_colors) {
-    Image img;
-    ASSERT_EQ(image_load(&img, "images/gradient.png"), 0);
+    GlifImage img;
+    ASSERT_EQ(glif_image_load(&img, "images/gradient.png"), 0);
 
-    Grid grid;
-    ASSERT_EQ(grid_create(&grid, &img, 10, 20), 0);
-    grid_compute_colors(&grid, &img);
+    GlifGrid grid;
+    ASSERT_EQ(glif_grid_create(&grid, &img, 10, 20), 0);
+    glif_grid_compute_colors(&grid, &img);
 
     /* Top-left cell of gradient should have low R (x starts at 0) */
     ASSERT_LT(grid.cells[0].r, 20);
     /* Last column should have high R */
     ASSERT_GT(grid.cells[grid.cols - 1].r, 200);
 
-    grid_free(&grid);
-    image_free(&img);
+    glif_grid_free(&grid);
+    glif_image_free(&img);
 }
 
 UTEST(grid, odd_sized_image) {
-    /* Image dimensions not evenly divisible by cell size: remainder is truncated */
-    Image img;
+    /* GlifImage dimensions not evenly divisible by cell size: remainder is truncated */
+    GlifImage img;
     img.width = 35;  /* 35 / 10 = 3, remainder 5 */
     img.height = 55; /* 55 / 20 = 2, remainder 15 */
     img.channels = 3;
     img.pixels = calloc((size_t)(35 * 55 * 3), 1);
     ASSERT_TRUE(img.pixels != NULL);
 
-    Grid grid;
-    ASSERT_EQ(grid_create(&grid, &img, 10, 20), 0);
+    GlifGrid grid;
+    ASSERT_EQ(glif_grid_create(&grid, &img, 10, 20), 0);
     ASSERT_EQ(grid.cols, 3);  /* 35 / 10 = 3 */
     ASSERT_EQ(grid.rows, 2);  /* 55 / 20 = 2 */
 
     /* Last cell pixel position should not exceed image bounds */
-    GridCell *last = &grid.cells[grid.rows * grid.cols - 1];
+    GlifGridCell *last = &grid.cells[grid.rows * grid.cols - 1];
     ASSERT_TRUE(last->px + grid.cell_w <= img.width);
     ASSERT_TRUE(last->py + grid.cell_h <= img.height);
 
-    grid_free(&grid);
+    glif_grid_free(&grid);
     free(img.pixels);
 }
 
 UTEST(grid, single_color_produces_uniform_color) {
     /* A solid red image should produce red color in all cells */
-    Image img;
+    GlifImage img;
     img.width = 20;
     img.height = 40;
     img.channels = 3;
@@ -139,12 +139,12 @@ UTEST(grid, single_color_produces_uniform_color) {
         img.pixels[i * 3 + 2] = 100;  /* B */
     }
 
-    Grid grid;
-    ASSERT_EQ(grid_create(&grid, &img, 10, 20), 0);
+    GlifGrid grid;
+    ASSERT_EQ(glif_grid_create(&grid, &img, 10, 20), 0);
     ASSERT_EQ(grid.rows, 2);
     ASSERT_EQ(grid.cols, 2);
 
-    grid_compute_colors(&grid, &img);
+    glif_grid_compute_colors(&grid, &img);
 
     for (int i = 0; i < grid.rows * grid.cols; i++) {
         ASSERT_EQ(grid.cells[i].r, 200);
@@ -152,16 +152,16 @@ UTEST(grid, single_color_produces_uniform_color) {
         ASSERT_EQ(grid.cells[i].b, 100);
     }
 
-    grid_free(&grid);
+    glif_grid_free(&grid);
     free(img.pixels);
 }
 
 UTEST(grid, cells_dont_overlap) {
-    Image img;
-    ASSERT_EQ(image_load(&img, "images/gradient.png"), 0);
+    GlifImage img;
+    ASSERT_EQ(glif_image_load(&img, "images/gradient.png"), 0);
 
-    Grid grid;
-    ASSERT_EQ(grid_create(&grid, &img, 10, 20), 0);
+    GlifGrid grid;
+    ASSERT_EQ(glif_grid_create(&grid, &img, 10, 20), 0);
 
     /* Check that no two cells share the same top-left pixel position */
     for (int i = 0; i < grid.rows * grid.cols; i++) {
@@ -187,41 +187,41 @@ UTEST(grid, cells_dont_overlap) {
         }
     }
 
-    grid_free(&grid);
-    image_free(&img);
+    glif_grid_free(&grid);
+    glif_image_free(&img);
 }
 
 UTEST(grid, default_char_is_space) {
-    Image img;
+    GlifImage img;
     img.width = 20;
     img.height = 20;
     img.channels = 3;
     img.pixels = calloc((size_t)(20 * 20 * 3), 1);
     ASSERT_TRUE(img.pixels != NULL);
 
-    Grid grid;
-    ASSERT_EQ(grid_create(&grid, &img, 10, 20), 0);
+    GlifGrid grid;
+    ASSERT_EQ(glif_grid_create(&grid, &img, 10, 20), 0);
 
     /* All cells should have default char = space */
     for (int i = 0; i < grid.rows * grid.cols; i++) {
         ASSERT_EQ(grid.cells[i].ch, ' ');
     }
 
-    grid_free(&grid);
+    glif_grid_free(&grid);
     free(img.pixels);
 }
 
 UTEST(grid, free_nullifies_cells) {
-    Image img;
+    GlifImage img;
     img.width = 20;
     img.height = 20;
     img.channels = 3;
     img.pixels = calloc((size_t)(20 * 20 * 3), 1);
     ASSERT_TRUE(img.pixels != NULL);
 
-    Grid grid;
-    ASSERT_EQ(grid_create(&grid, &img, 10, 20), 0);
-    grid_free(&grid);
+    GlifGrid grid;
+    ASSERT_EQ(glif_grid_create(&grid, &img, 10, 20), 0);
+    glif_grid_free(&grid);
     ASSERT_TRUE(grid.cells == NULL);
 
     free(img.pixels);

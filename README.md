@@ -195,6 +195,51 @@ Features:
 - **Persistence** — Enabled state auto-restores on new tabs and page refreshes
 - **Real-time controls** — Edge/contrast sliders and hi-res toggle update immediately
 
+## Language bindings
+
+### Node.js
+
+```bash
+cd bindings/node && npm install
+```
+
+```javascript
+const glif = require('@artalis/glif');
+const result = glif.render('photo.png', 'fonts/GeistMono-Regular.ttf');
+console.log(result.toPlainText());
+```
+
+Quick start — run the bundled examples:
+
+```bash
+cd bindings/node/examples && npm install
+npm start                                     # render raccoon.jpg (plain ASCII)
+node render.mjs --color                       # ANSI truecolor
+node render.mjs photo.png font.ttf --color    # custom image + font
+node pipeline.mjs                             # step-by-step low-level API
+```
+
+### Python
+
+```bash
+make shared
+pip install bindings/python
+```
+
+```python
+import glif
+result = glif.render('photo.png', 'fonts/GeistMono-Regular.ttf')
+print(result.to_plain_text())
+```
+
+Quick start — run the bundled examples (from `bindings/python/`):
+
+```bash
+python -m examples.render ../../images/raccoon.jpg ../../fonts/GeistMono-Regular.ttf
+python -m examples.render ../../images/raccoon.jpg ../../fonts/GeistMono-Regular.ttf --color
+python -m examples.pipeline ../../images/raccoon.jpg ../../fonts/GeistMono-Regular.ttf
+```
+
 ## Web demo
 
 The C core compiles to WebAssembly via Emscripten. The web UI uses Nuklear for widgets, Clay for layout, and a WebGL font-atlas shader for GPU-accelerated rendering.

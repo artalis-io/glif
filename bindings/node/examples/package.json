@@ -1,0 +1,13 @@
+{
+  "name": "glif-examples",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "start": "node render.mjs",
+    "render": "node render.mjs",
+    "pipeline": "node pipeline.mjs"
+  },
+  "dependencies": {
+    "@artalis/glif": "file:.."
+  }
+}

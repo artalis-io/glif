@@ -76,15 +76,15 @@ static const char *vp_frag_src =
 
 static struct {
     /* Glif pipeline */
-    CharDatabase db;
-    SamplingConfig sc;
-    PrecomputedMasks pm;
+    GlifCharDatabase db;
+    GlifSamplingConfig sc;
+    GlifPrecomputedMasks pm;
     int cell_w, cell_h;
     float dir_crunch, global_crunch;
     int pm_stride;
 
     /* Current frame result */
-    Grid grid;
+    GlifGrid grid;
     int has_result;
 
     /* Viewport WebGL */
@@ -105,13 +105,13 @@ static struct {
     int canvas_w, canvas_h;
 
     /* Temporal smoothing */
-    NormSmoother norm_sm;
-    ShapeSmoother shape_sm;
-    ContrastSmoother contrast_sm;
-    MatchSmoother match_sm;
+    GlifNormSmoother norm_sm;
+    GlifShapeSmoother shape_sm;
+    GlifContrastSmoother contrast_sm;
+    GlifMatchSmoother match_sm;
 
     /* Adaptive contrast */
-    AdaptiveContrast adaptive;
+    GlifAdaptiveContrast adaptive;
 
     /* Resolution mode */
     int hi_res; /* 0 = ~120 cols, 1 = ~240 cols */
@@ -234,7 +234,7 @@ static void vp_build_font_atlas(void) {
     free(atlas_rgba);
 }
 
-static void vp_render(const Grid *grid) {
+static void vp_render(const GlifGrid *grid) {
     if (!ext.vp_program || !ext.atlas_tex || !grid || grid->rows <= 0)
         return;
 
@@ -324,14 +324,14 @@ static void vp_render(const Grid *grid) {
 static void rebuild_pipeline(void) {
     if (!ext.font_loaded) return;
 
-    char_db_free(&ext.db);
+    glif_char_db_free(&ext.db);
     if (ext.pm_stride != 0) {
-        sampling_precompute_free(&ext.pm);
+        glif_sampling_precompute_free(&ext.pm);
         ext.pm_stride = 0;
     }
 
-    sampling_config_init(&ext.sc);
-    if (char_db_create_from_memory(&ext.db, ext.font_data, (size_t)ext.font_len,
+    glif_sampling_config_init(&ext.sc);
+    if (glif_char_db_create_from_memory(&ext.db, ext.font_data, (size_t)ext.font_len,
                                    ext.cell_w, ext.cell_h, &ext.sc) != 0) {
         ext.font_loaded = 0;
         return;
@@ -343,8 +343,8 @@ static void rebuild_pipeline(void) {
 static void process_frame(const uint8_t *pixels, int w, int h) {
     if (!ext.font_loaded) return;
 
-    Image img;
-    if (image_load_buffer(&img, pixels, w, h, 4) != 0) return;
+    GlifImage img;
+    if (glif_image_load_buffer(&img, pixels, w, h, 4) != 0) return;
 
     /* Recompute cell size if image width changed */
     int new_cw, new_ch;
@@ -353,48 +353,48 @@ static void process_frame(const uint8_t *pixels, int w, int h) {
         ext.cell_w = new_cw;
         ext.cell_h = new_ch;
         if (ext.pm_stride != 0) {
-            sampling_precompute_free(&ext.pm);
+            glif_sampling_precompute_free(&ext.pm);
             ext.pm_stride = 0;
         }
         /* Reset smoothers — grid dimensions changed */
-        norm_smoother_init(&ext.norm_sm);
-        shape_smoother_free(&ext.shape_sm);
-        contrast_smoother_init(&ext.contrast_sm);
-        match_smoother_free(&ext.match_sm);
+        glif_norm_smoother_init(&ext.norm_sm);
+        glif_shape_smoother_free(&ext.shape_sm);
+        glif_contrast_smoother_init(&ext.contrast_sm);
+        glif_match_smoother_free(&ext.match_sm);
         rebuild_pipeline();
     }
 
     /* Rebuild masks if stride changed */
     if (ext.pm_stride != w) {
-        if (ext.pm_stride != 0) sampling_precompute_free(&ext.pm);
-        if (sampling_precompute(&ext.pm, &ext.sc, ext.cell_w, ext.cell_h, w) != 0)
+        if (ext.pm_stride != 0) glif_sampling_precompute_free(&ext.pm);
+        if (glif_sampling_precompute(&ext.pm, &ext.sc, ext.cell_w, ext.cell_h, w) != 0)
             return;
         ext.pm_stride = w;
     }
 
-    LightnessMap lm;
-    if (lightness_map_create(&lm, &img) != 0) return;
+    GlifLightnessMap lm;
+    if (glif_lightness_map_create(&lm, &img) != 0) return;
 
-    if (ext.has_result) grid_free(&ext.grid);
+    if (ext.has_result) glif_grid_free(&ext.grid);
 
-    if (grid_create(&ext.grid, &img, ext.cell_w, ext.cell_h) != 0) {
-        lightness_map_free(&lm);
+    if (glif_grid_create(&ext.grid, &img, ext.cell_w, ext.cell_h) != 0) {
+        glif_lightness_map_free(&lm);
         return;
     }
 
     /* Always use temporal smoothing for video */
-    norm_smoother_apply(&ext.norm_sm, &lm, 0.4f);
-    grid_compute_vectors_fast(&ext.grid, &lm, &ext.pm);
-    shape_smoother_apply(&ext.shape_sm, &ext.grid, 0.4f);
-    grid_compute_colors(&ext.grid, &img);
-    contrast_analyze_frame(&ext.adaptive, &ext.grid);
-    contrast_smoother_apply(&ext.contrast_sm, &ext.adaptive, 0.3f);
-    contrast_directional(&ext.grid, &ext.sc, ext.dir_crunch, &ext.adaptive);
-    contrast_global(&ext.grid, ext.global_crunch, &ext.adaptive);
-    match_smoother_apply(&ext.match_sm, &ext.grid, &ext.db, 0.15f);
+    glif_norm_smoother_apply(&ext.norm_sm, &lm, 0.4f);
+    glif_grid_compute_vectors_fast(&ext.grid, &lm, &ext.pm);
+    glif_shape_smoother_apply(&ext.shape_sm, &ext.grid, 0.4f);
+    glif_grid_compute_colors(&ext.grid, &img);
+    glif_contrast_analyze_frame(&ext.adaptive, &ext.grid);
+    glif_contrast_smoother_apply(&ext.contrast_sm, &ext.adaptive, 0.3f);
+    glif_contrast_directional(&ext.grid, &ext.sc, ext.dir_crunch, &ext.adaptive);
+    glif_contrast_global(&ext.grid, ext.global_crunch, &ext.adaptive);
+    glif_match_smoother_apply(&ext.match_sm, &ext.grid, &ext.db, 0.15f);
 
     ext.has_result = 1;
-    lightness_map_free(&lm);
+    glif_lightness_map_free(&lm);
 }
 
 /* ── Exported WASM API ── */
@@ -435,7 +435,7 @@ void ext_init(float dpr, int canvas_w, int canvas_h) {
     }
 
     vp_init();
-    sampling_config_init(&ext.sc);
+    glif_sampling_config_init(&ext.sc);
 
     if (ext.font_loaded)
         rebuild_pipeline();
@@ -486,19 +486,19 @@ void ext_set_hires(int hires) {
 
     /* Force cell size recomputation on next frame by invalidating stride */
     if (ext.pm_stride != 0) {
-        sampling_precompute_free(&ext.pm);
+        glif_sampling_precompute_free(&ext.pm);
         ext.pm_stride = 0;
     }
     ext.cell_w = 10;
     ext.cell_h = 20;
 
-    norm_smoother_init(&ext.norm_sm);
-    shape_smoother_free(&ext.shape_sm);
-    contrast_smoother_init(&ext.contrast_sm);
-    match_smoother_free(&ext.match_sm);
+    glif_norm_smoother_init(&ext.norm_sm);
+    glif_shape_smoother_free(&ext.shape_sm);
+    glif_contrast_smoother_init(&ext.contrast_sm);
+    glif_match_smoother_free(&ext.match_sm);
 
     if (ext.has_result) {
-        grid_free(&ext.grid);
+        glif_grid_free(&ext.grid);
         ext.has_result = 0;
     }
 }

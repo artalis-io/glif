@@ -1,0 +1,20 @@
+{
+  "name": "@artalis/glif",
+  "version": "0.1.0",
+  "description": "Node.js bindings for Glif — shape-based ASCII art renderer",
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "scripts": {
+    "install": "node-gyp rebuild",
+    "test": "node --test test/test.mjs"
+  },
+  "dependencies": {
+    "node-addon-api": "^7.0.0"
+  },
+  "files": [
+    "lib/",
+    "src/",
+    "binding.gyp"
+  ],
+  "license": "MIT"
+}

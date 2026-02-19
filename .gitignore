@@ -28,8 +28,19 @@ videos/
 # Output files
 *.ppm
 
-# Node.js (extension tests)
+# Shared library
+libglif.so
+libglif.dylib
+
+# Node.js
 node_modules/
+bindings/node/build/
+
+# Python
+*.egg-info/
+__pycache__/
+*.pyc
+bindings/python/.pytest_cache/
 
 # WASM build output
 web/glif.js
