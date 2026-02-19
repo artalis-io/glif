@@ -1,0 +1,16 @@
+[project]
+name = "glif"
+version = "0.1.0"
+description = "Python bindings for Glif — shape-based ASCII art renderer"
+requires-python = ">=3.9"
+dependencies = ["cffi>=1.16"]
+
+[project.optional-dependencies]
+dev = ["pytest>=7"]
+
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]

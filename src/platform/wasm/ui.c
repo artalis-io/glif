@@ -89,17 +89,17 @@ static struct {
     void *clay_mem;
 
     /* Glif pipeline */
-    CharDatabase db;
-    SamplingConfig sc;
-    PrecomputedMasks pm;
+    GlifCharDatabase db;
+    GlifSamplingConfig sc;
+    GlifPrecomputedMasks pm;
     int cell_w, cell_h;
     float dir_crunch, global_crunch;
-    AdaptiveContrast adaptive;
+    GlifAdaptiveContrast adaptive;
     int adaptive_on;
     int pm_stride;
 
     /* Current frame result */
-    Grid grid;
+    GlifGrid grid;
     int has_result;
 
     /* Viewport WebGL */
@@ -133,10 +133,10 @@ static struct {
 
     /* Temporal smoothing */
     int stabilize;
-    NormSmoother norm_sm;
-    ShapeSmoother shape_sm;
-    ContrastSmoother contrast_sm;
-    MatchSmoother match_sm;
+    GlifNormSmoother norm_sm;
+    GlifShapeSmoother shape_sm;
+    GlifContrastSmoother contrast_sm;
+    GlifMatchSmoother match_sm;
 
     /* Previous parameter values for change detection */
     float prev_dir_crunch, prev_global_crunch;
@@ -270,7 +270,7 @@ static void vp_build_font_atlas(void) {
     free(atlas_rgba);
 }
 
-static void vp_render(const Grid *grid, Clay_BoundingBox bounds) {
+static void vp_render(const GlifGrid *grid, Clay_BoundingBox bounds) {
     if (!app.vp_program || !app.atlas_tex || !grid || grid->rows <= 0)
         return;
 
@@ -369,14 +369,14 @@ static void vp_render(const Grid *grid, Clay_BoundingBox bounds) {
 static void rebuild_pipeline(void) {
     if (!app.font_loaded) return;
 
-    char_db_free(&app.db);
+    glif_char_db_free(&app.db);
     if (app.pm_stride != 0) {
-        sampling_precompute_free(&app.pm);
+        glif_sampling_precompute_free(&app.pm);
         app.pm_stride = 0;
     }
 
-    sampling_config_init(&app.sc);
-    if (char_db_create_from_memory(&app.db, app.font_data, (size_t)app.font_len,
+    glif_sampling_config_init(&app.sc);
+    if (glif_char_db_create_from_memory(&app.db, app.font_data, (size_t)app.font_len,
                                    app.cell_w, app.cell_h, &app.sc) != 0) {
         app.font_loaded = 0;
         return;
@@ -388,60 +388,60 @@ static void rebuild_pipeline(void) {
 static void process_frame(const uint8_t *pixels, int w, int h, int channels) {
     if (!app.font_loaded) return;
 
-    Image img;
-    if (image_load_buffer(&img, pixels, w, h, channels) != 0) return;
+    GlifImage img;
+    if (glif_image_load_buffer(&img, pixels, w, h, channels) != 0) return;
 
     /* Rebuild masks if stride changed */
     if (app.pm_stride != w) {
-        if (app.pm_stride != 0) sampling_precompute_free(&app.pm);
-        if (sampling_precompute(&app.pm, &app.sc, app.cell_w, app.cell_h, w) != 0)
+        if (app.pm_stride != 0) glif_sampling_precompute_free(&app.pm);
+        if (glif_sampling_precompute(&app.pm, &app.sc, app.cell_w, app.cell_h, w) != 0)
             return;
         app.pm_stride = w;
     }
 
-    LightnessMap lm;
-    if (lightness_map_create(&lm, &img) != 0) return;
+    GlifLightnessMap lm;
+    if (glif_lightness_map_create(&lm, &img) != 0) return;
 
-    if (app.has_result) grid_free(&app.grid);
+    if (app.has_result) glif_grid_free(&app.grid);
 
-    if (grid_create(&app.grid, &img, app.cell_w, app.cell_h) != 0) {
-        lightness_map_free(&lm);
+    if (glif_grid_create(&app.grid, &img, app.cell_w, app.cell_h) != 0) {
+        glif_lightness_map_free(&lm);
         return;
     }
 
     if (app.stabilize)
-        norm_smoother_apply(&app.norm_sm, &lm, 0.4f);
+        glif_norm_smoother_apply(&app.norm_sm, &lm, 0.4f);
     else
-        lightness_map_normalize(&lm);
+        glif_lightness_map_normalize(&lm);
 
     /* Temporarily disable adaptive per-cell crunch when toggle is off */
     float saved_floor = app.adaptive.floor;
     if (!app.adaptive_on)
         app.adaptive.floor = -1.0f;
 
-    grid_compute_vectors_fast(&app.grid, &lm, &app.pm);
+    glif_grid_compute_vectors_fast(&app.grid, &lm, &app.pm);
 
     if (app.stabilize)
-        shape_smoother_apply(&app.shape_sm, &app.grid, 0.4f);
+        glif_shape_smoother_apply(&app.shape_sm, &app.grid, 0.4f);
 
-    grid_compute_colors(&app.grid, &img);
-    contrast_analyze_frame(&app.adaptive, &app.grid);
+    glif_grid_compute_colors(&app.grid, &img);
+    glif_contrast_analyze_frame(&app.adaptive, &app.grid);
 
     if (app.stabilize)
-        contrast_smoother_apply(&app.contrast_sm, &app.adaptive, 0.3f);
+        glif_contrast_smoother_apply(&app.contrast_sm, &app.adaptive, 0.3f);
 
-    contrast_directional(&app.grid, &app.sc, app.dir_crunch, &app.adaptive);
-    contrast_global(&app.grid, app.global_crunch, &app.adaptive);
+    glif_contrast_directional(&app.grid, &app.sc, app.dir_crunch, &app.adaptive);
+    glif_contrast_global(&app.grid, app.global_crunch, &app.adaptive);
 
     app.adaptive.floor = saved_floor;
 
     if (app.stabilize)
-        match_smoother_apply(&app.match_sm, &app.grid, &app.db, 0.15f);
+        glif_match_smoother_apply(&app.match_sm, &app.grid, &app.db, 0.15f);
     else
-        match_grid(&app.grid, &app.db);
+        glif_match_grid(&app.grid, &app.db);
 
     app.has_result = 1;
-    lightness_map_free(&lm);
+    glif_lightness_map_free(&lm);
 }
 
 /* ── Exported WASM API ── */
@@ -505,7 +505,7 @@ void app_init(float dpr, int canvas_w, int canvas_h) {
     /* Init viewport shader */
     vp_init();
 
-    sampling_config_init(&app.sc);
+    glif_sampling_config_init(&app.sc);
 
     /* Build pipeline with default font */
     if (app.font_loaded)
@@ -687,14 +687,14 @@ void app_frame(void) {
             compute_cell_size(app.pending_w, app.pending_h, app.hi_res,
                               &app.cell_w, &app.cell_h);
             if (app.pm_stride != 0) {
-                sampling_precompute_free(&app.pm);
+                glif_sampling_precompute_free(&app.pm);
                 app.pm_stride = 0;
             }
             /* Reset all smoothers — grid dimensions changed */
-            norm_smoother_init(&app.norm_sm);
-            shape_smoother_free(&app.shape_sm);
-            contrast_smoother_init(&app.contrast_sm);
-            match_smoother_free(&app.match_sm);
+            glif_norm_smoother_init(&app.norm_sm);
+            glif_shape_smoother_free(&app.shape_sm);
+            glif_contrast_smoother_init(&app.contrast_sm);
+            glif_match_smoother_free(&app.match_sm);
             rebuild_pipeline();
             app.pending_dirty = 1;
         }
@@ -703,10 +703,10 @@ void app_frame(void) {
         app.prev_stabilize = app.stabilize;
         if (!app.stabilize) {
             /* Reset smoothers so they start fresh when re-enabled */
-            norm_smoother_init(&app.norm_sm);
-            shape_smoother_free(&app.shape_sm);
-            contrast_smoother_init(&app.contrast_sm);
-            match_smoother_free(&app.match_sm);
+            glif_norm_smoother_init(&app.norm_sm);
+            glif_shape_smoother_free(&app.shape_sm);
+            glif_contrast_smoother_init(&app.contrast_sm);
+            glif_match_smoother_free(&app.match_sm);
         }
         if (app.pending_pixels) app.pending_dirty = 1;
     }
@@ -790,7 +790,7 @@ void app_load_image(const uint8_t *data, int w, int h, int channels) {
         app.cell_w = new_cw;
         app.cell_h = new_ch;
         if (app.pm_stride != 0) {
-            sampling_precompute_free(&app.pm);
+            glif_sampling_precompute_free(&app.pm);
             app.pm_stride = 0;
         }
         rebuild_pipeline();

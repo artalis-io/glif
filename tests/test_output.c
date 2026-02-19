@@ -17,16 +17,16 @@ static const char *test_font(void) {
 }
 
 /* Helper: create a small grid with known characters and colors */
-static Grid make_test_grid(int rows, int cols, int cell_w, int cell_h, char fill_ch) {
-    Grid grid;
+static GlifGrid make_test_grid(int rows, int cols, int cell_w, int cell_h, char fill_ch) {
+    GlifGrid grid;
     grid.rows = rows;
     grid.cols = cols;
     grid.cell_w = cell_w;
     grid.cell_h = cell_h;
-    grid.cells = calloc((size_t)(rows * cols), sizeof(GridCell));
+    grid.cells = calloc((size_t)(rows * cols), sizeof(GlifGridCell));
     for (int r = 0; r < rows; r++) {
         for (int c = 0; c < cols; c++) {
-            GridCell *cell = &grid.cells[r * cols + c];
+            GlifGridCell *cell = &grid.cells[r * cols + c];
             cell->px = c * cell_w;
             cell->py = r * cell_h;
             cell->ch = fill_ch;
@@ -39,10 +39,10 @@ static Grid make_test_grid(int rows, int cols, int cell_w, int cell_h, char fill
 }
 
 /*
- * Helper: redirect stdout to a file, call output_plain, restore stdout.
+ * Helper: redirect stdout to a file, call glif_output_plain, restore stdout.
  * Returns 0 on success, -1 on failure.
  */
-static int capture_plain_output(const Grid *grid, const char *path) {
+static int capture_plain_output(const GlifGrid *grid, const char *path) {
     fflush(stdout);
     int saved_fd = dup(STDOUT_FILENO);
     if (saved_fd < 0) return -1;
@@ -53,7 +53,7 @@ static int capture_plain_output(const Grid *grid, const char *path) {
     dup2(file_fd, STDOUT_FILENO);
     close(file_fd);
 
-    output_plain(grid);
+    glif_output_plain(grid);
 
     fflush(stdout);
     dup2(saved_fd, STDOUT_FILENO);
@@ -62,17 +62,17 @@ static int capture_plain_output(const Grid *grid, const char *path) {
 }
 
 UTEST(output, ppm_writes_valid_header) {
-    SamplingConfig sc;
-    sampling_config_init(&sc);
+    GlifSamplingConfig sc;
+    glif_sampling_config_init(&sc);
 
-    CharDatabase db;
-    int ret = char_db_create(&db, test_font(), 10, 20, &sc);
+    GlifCharDatabase db;
+    int ret = glif_char_db_create(&db, test_font(), 10, 20, &sc);
     if (ret != 0) return;
 
-    Grid grid = make_test_grid(3, 4, 10, 20, 'A');
+    GlifGrid grid = make_test_grid(3, 4, 10, 20, 'A');
 
     const char *path = "/tmp/glif_test_header.ppm";
-    ret = output_ppm(&grid, &db, path, 1, 0);
+    ret = glif_output_ppm(&grid, &db, path, 1, 0);
     ASSERT_EQ(ret, 0);
 
     /* Read back the file and verify PPM header */
@@ -91,25 +91,25 @@ UTEST(output, ppm_writes_valid_header) {
     fclose(f);
     remove(path);
     free(grid.cells);
-    char_db_free(&db);
+    glif_char_db_free(&db);
 }
 
 UTEST(output, ppm_scale1_vs_scale4_different_sizes) {
-    SamplingConfig sc;
-    sampling_config_init(&sc);
+    GlifSamplingConfig sc;
+    glif_sampling_config_init(&sc);
 
-    CharDatabase db;
-    int ret = char_db_create(&db, test_font(), 10, 20, &sc);
+    GlifCharDatabase db;
+    int ret = glif_char_db_create(&db, test_font(), 10, 20, &sc);
     if (ret != 0) return;
 
-    Grid grid = make_test_grid(2, 3, 10, 20, 'X');
+    GlifGrid grid = make_test_grid(2, 3, 10, 20, 'X');
 
     const char *path1 = "/tmp/glif_test_scale1.ppm";
     const char *path4 = "/tmp/glif_test_scale4.ppm";
 
-    ret = output_ppm(&grid, &db, path1, 1, 0);
+    ret = glif_output_ppm(&grid, &db, path1, 1, 0);
     ASSERT_EQ(ret, 0);
-    ret = output_ppm(&grid, &db, path4, 4, 0);
+    ret = glif_output_ppm(&grid, &db, path4, 4, 0);
     ASSERT_EQ(ret, 0);
 
     /* Compare file sizes */
@@ -132,22 +132,22 @@ UTEST(output, ppm_scale1_vs_scale4_different_sizes) {
     remove(path1);
     remove(path4);
     free(grid.cells);
-    char_db_free(&db);
+    glif_char_db_free(&db);
 }
 
 UTEST(output, ppm_file_size_matches_expected) {
-    SamplingConfig sc;
-    sampling_config_init(&sc);
+    GlifSamplingConfig sc;
+    glif_sampling_config_init(&sc);
 
-    CharDatabase db;
-    int ret = char_db_create(&db, test_font(), 10, 20, &sc);
+    GlifCharDatabase db;
+    int ret = glif_char_db_create(&db, test_font(), 10, 20, &sc);
     if (ret != 0) return;
 
     int rows = 2, cols = 3, cell_w = 10, cell_h = 20, scale = 1;
-    Grid grid = make_test_grid(rows, cols, cell_w, cell_h, 'H');
+    GlifGrid grid = make_test_grid(rows, cols, cell_w, cell_h, 'H');
 
     const char *path = "/tmp/glif_test_size.ppm";
-    ret = output_ppm(&grid, &db, path, scale, 0);
+    ret = glif_output_ppm(&grid, &db, path, scale, 0);
     ASSERT_EQ(ret, 0);
 
     /* Calculate expected pixel data size */
@@ -172,11 +172,11 @@ UTEST(output, ppm_file_size_matches_expected) {
 
     remove(path);
     free(grid.cells);
-    char_db_free(&db);
+    glif_char_db_free(&db);
 }
 
 UTEST(output, plain_correct_lines_and_columns) {
-    Grid grid = make_test_grid(3, 5, 10, 20, 'Q');
+    GlifGrid grid = make_test_grid(3, 5, 10, 20, 'Q');
 
     const char *path = "/tmp/glif_test_plain.txt";
     ASSERT_EQ(capture_plain_output(&grid, path), 0);
@@ -204,12 +204,12 @@ UTEST(output, plain_correct_lines_and_columns) {
 }
 
 UTEST(output, plain_roundtrip_known_chars) {
-    Grid grid;
+    GlifGrid grid;
     grid.rows = 2;
     grid.cols = 4;
     grid.cell_w = 10;
     grid.cell_h = 20;
-    grid.cells = calloc(8, sizeof(GridCell));
+    grid.cells = calloc(8, sizeof(GlifGridCell));
     ASSERT_TRUE(grid.cells != NULL);
 
     const char *expected_chars = "ABCD1234";
@@ -244,18 +244,18 @@ UTEST(output, plain_roundtrip_known_chars) {
 }
 
 UTEST(output, ppm_with_scale4_file_size) {
-    SamplingConfig sc;
-    sampling_config_init(&sc);
+    GlifSamplingConfig sc;
+    glif_sampling_config_init(&sc);
 
-    CharDatabase db;
-    int ret = char_db_create(&db, test_font(), 10, 20, &sc);
+    GlifCharDatabase db;
+    int ret = glif_char_db_create(&db, test_font(), 10, 20, &sc);
     if (ret != 0) return;
 
     int rows = 2, cols = 3, cell_w = 10, cell_h = 20, scale = 4;
-    Grid grid = make_test_grid(rows, cols, cell_w, cell_h, 'W');
+    GlifGrid grid = make_test_grid(rows, cols, cell_w, cell_h, 'W');
 
     const char *path = "/tmp/glif_test_size4.ppm";
-    ret = output_ppm(&grid, &db, path, scale, 0);
+    ret = glif_output_ppm(&grid, &db, path, scale, 0);
     ASSERT_EQ(ret, 0);
 
     int img_w = cols * cell_w * scale;
@@ -277,38 +277,38 @@ UTEST(output, ppm_with_scale4_file_size) {
 
     remove(path);
     free(grid.cells);
-    char_db_free(&db);
+    glif_char_db_free(&db);
 }
 
 UTEST(output, ppm_invalid_path_fails) {
-    SamplingConfig sc;
-    sampling_config_init(&sc);
+    GlifSamplingConfig sc;
+    glif_sampling_config_init(&sc);
 
-    CharDatabase db;
-    int ret = char_db_create(&db, test_font(), 10, 20, &sc);
+    GlifCharDatabase db;
+    int ret = glif_char_db_create(&db, test_font(), 10, 20, &sc);
     if (ret != 0) return;
 
-    Grid grid = make_test_grid(1, 1, 10, 20, 'X');
+    GlifGrid grid = make_test_grid(1, 1, 10, 20, 'X');
 
     /* Try writing to a nonexistent directory */
-    ret = output_ppm(&grid, &db, "/nonexistent_dir/test.ppm", 1, 0);
+    ret = glif_output_ppm(&grid, &db, "/nonexistent_dir/test.ppm", 1, 0);
     ASSERT_NE(ret, 0);
 
     free(grid.cells);
-    char_db_free(&db);
+    glif_char_db_free(&db);
 }
 
-/* ---- FrameDiff tests ---- */
+/* ---- GlifFrameDiff tests ---- */
 
 UTEST(output, frame_diff_init_and_free) {
-    FrameDiff fd;
-    int ret = frame_diff_init(&fd, 10, 20);
+    GlifFrameDiff fd;
+    int ret = glif_frame_diff_init(&fd, 10, 20);
     ASSERT_EQ(ret, 0);
     ASSERT_TRUE(fd.buf != NULL);
     ASSERT_TRUE(fd.prev != NULL);
     ASSERT_EQ(fd.cells, 200);
     ASSERT_EQ(fd.cols, 20);
-    frame_diff_free(&fd);
+    glif_frame_diff_free(&fd);
     ASSERT_TRUE(fd.buf == NULL);
     ASSERT_TRUE(fd.prev == NULL);
 }
@@ -316,9 +316,9 @@ UTEST(output, frame_diff_init_and_free) {
 UTEST(output, frame_diff_first_frame_renders_all_cells) {
     /* First frame: prev is zeroed, all cells differ → output should contain
      * every cell's character and color. */
-    Grid grid = make_test_grid(3, 4, 10, 20, 'A');
-    FrameDiff fd;
-    ASSERT_EQ(frame_diff_init(&fd, 3, 4), 0);
+    GlifGrid grid = make_test_grid(3, 4, 10, 20, 'A');
+    GlifFrameDiff fd;
+    ASSERT_EQ(glif_frame_diff_init(&fd, 3, 4), 0);
 
     const char *path = "/tmp/glif_test_diff_first.txt";
     fflush(stdout);
@@ -327,7 +327,7 @@ UTEST(output, frame_diff_first_frame_renders_all_cells) {
     dup2(file_fd, STDOUT_FILENO);
     close(file_fd);
 
-    frame_diff_render(&fd, &grid, 1);
+    glif_frame_diff_render(&fd, &grid, 1);
 
     fflush(stdout);
     dup2(saved_fd, STDOUT_FILENO);
@@ -349,7 +349,7 @@ UTEST(output, frame_diff_first_frame_renders_all_cells) {
     file_fd = open(path2, O_WRONLY | O_CREAT | O_TRUNC, 0644);
     dup2(file_fd, STDOUT_FILENO);
     close(file_fd);
-    frame_diff_render(&fd, &grid, 1);
+    glif_frame_diff_render(&fd, &grid, 1);
     fflush(stdout);
     dup2(saved_fd, STDOUT_FILENO);
     close(saved_fd);
@@ -363,15 +363,15 @@ UTEST(output, frame_diff_first_frame_renders_all_cells) {
 
     remove(path);
     remove(path2);
-    frame_diff_free(&fd);
+    glif_frame_diff_free(&fd);
     free(grid.cells);
 }
 
 UTEST(output, frame_diff_identical_frame_no_output) {
     /* Render once, then render the exact same grid → should produce no output */
-    Grid grid = make_test_grid(2, 3, 10, 20, 'B');
-    FrameDiff fd;
-    ASSERT_EQ(frame_diff_init(&fd, 2, 3), 0);
+    GlifGrid grid = make_test_grid(2, 3, 10, 20, 'B');
+    GlifFrameDiff fd;
+    ASSERT_EQ(glif_frame_diff_init(&fd, 2, 3), 0);
 
     /* First render — populates prev */
     fflush(stdout);
@@ -379,7 +379,7 @@ UTEST(output, frame_diff_identical_frame_no_output) {
     int file_fd = open("/dev/null", O_WRONLY);
     dup2(file_fd, STDOUT_FILENO);
     close(file_fd);
-    frame_diff_render(&fd, &grid, 1);
+    glif_frame_diff_render(&fd, &grid, 1);
     fflush(stdout);
     dup2(saved_fd, STDOUT_FILENO);
     close(saved_fd);
@@ -391,7 +391,7 @@ UTEST(output, frame_diff_identical_frame_no_output) {
     file_fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
     dup2(file_fd, STDOUT_FILENO);
     close(file_fd);
-    frame_diff_render(&fd, &grid, 0);
+    glif_frame_diff_render(&fd, &grid, 0);
     fflush(stdout);
     dup2(saved_fd, STDOUT_FILENO);
     close(saved_fd);
@@ -405,15 +405,15 @@ UTEST(output, frame_diff_identical_frame_no_output) {
     ASSERT_EQ(size, 0);
 
     remove(path);
-    frame_diff_free(&fd);
+    glif_frame_diff_free(&fd);
     free(grid.cells);
 }
 
 UTEST(output, frame_diff_single_cell_change_uses_cursor_move) {
     /* Render once, change one cell, render again → output should contain \033[r;cH */
-    Grid grid = make_test_grid(3, 4, 10, 20, 'C');
-    FrameDiff fd;
-    ASSERT_EQ(frame_diff_init(&fd, 3, 4), 0);
+    GlifGrid grid = make_test_grid(3, 4, 10, 20, 'C');
+    GlifFrameDiff fd;
+    ASSERT_EQ(glif_frame_diff_init(&fd, 3, 4), 0);
 
     /* First render */
     fflush(stdout);
@@ -421,7 +421,7 @@ UTEST(output, frame_diff_single_cell_change_uses_cursor_move) {
     int file_fd = open("/dev/null", O_WRONLY);
     dup2(file_fd, STDOUT_FILENO);
     close(file_fd);
-    frame_diff_render(&fd, &grid, 1);
+    glif_frame_diff_render(&fd, &grid, 1);
     fflush(stdout);
     dup2(saved_fd, STDOUT_FILENO);
     close(saved_fd);
@@ -437,7 +437,7 @@ UTEST(output, frame_diff_single_cell_change_uses_cursor_move) {
     file_fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
     dup2(file_fd, STDOUT_FILENO);
     close(file_fd);
-    frame_diff_render(&fd, &grid, 1);
+    glif_frame_diff_render(&fd, &grid, 1);
     fflush(stdout);
     dup2(saved_fd, STDOUT_FILENO);
     close(saved_fd);
@@ -472,22 +472,22 @@ UTEST(output, frame_diff_single_cell_change_uses_cursor_move) {
 
     free(content);
     remove(path);
-    frame_diff_free(&fd);
+    glif_frame_diff_free(&fd);
     free(grid.cells);
 }
 
-/* ---- PpmPipe tests ---- */
+/* ---- GlifPpmPipe tests ---- */
 
 UTEST(output, ppm_pipe_init_and_free) {
-    SamplingConfig sc;
-    sampling_config_init(&sc);
-    CharDatabase db;
-    if (char_db_create(&db, test_font(), 10, 20, &sc) != 0) return;
+    GlifSamplingConfig sc;
+    glif_sampling_config_init(&sc);
+    GlifCharDatabase db;
+    if (glif_char_db_create(&db, test_font(), 10, 20, &sc) != 0) return;
 
-    Grid grid = make_test_grid(3, 4, 10, 20, 'A');
+    GlifGrid grid = make_test_grid(3, 4, 10, 20, 'A');
 
-    PpmPipe pp;
-    int ret = ppm_pipe_init(&pp, &grid, &db, 2, 0);
+    GlifPpmPipe pp;
+    int ret = glif_ppm_pipe_init(&pp, &grid, &db, 2, 0);
     ASSERT_EQ(ret, 0);
     ASSERT_TRUE(pp.pixels != NULL);
     ASSERT_TRUE(pp.render_bmps != NULL);
@@ -496,44 +496,44 @@ UTEST(output, ppm_pipe_init_and_free) {
     ASSERT_EQ(pp.rw, 20);
     ASSERT_EQ(pp.rh, 40);
 
-    ppm_pipe_free(&pp);
+    glif_ppm_pipe_free(&pp);
     ASSERT_TRUE(pp.pixels == NULL);
     ASSERT_TRUE(pp.render_bmps == NULL);
 
     free(grid.cells);
-    char_db_free(&db);
+    glif_char_db_free(&db);
 }
 
 UTEST(output, ppm_pipe_scale1_no_render_bmps) {
-    SamplingConfig sc;
-    sampling_config_init(&sc);
-    CharDatabase db;
-    if (char_db_create(&db, test_font(), 10, 20, &sc) != 0) return;
+    GlifSamplingConfig sc;
+    glif_sampling_config_init(&sc);
+    GlifCharDatabase db;
+    if (glif_char_db_create(&db, test_font(), 10, 20, &sc) != 0) return;
 
-    Grid grid = make_test_grid(2, 2, 10, 20, 'X');
+    GlifGrid grid = make_test_grid(2, 2, 10, 20, 'X');
 
-    PpmPipe pp;
-    int ret = ppm_pipe_init(&pp, &grid, &db, 1, 0);
+    GlifPpmPipe pp;
+    int ret = glif_ppm_pipe_init(&pp, &grid, &db, 1, 0);
     ASSERT_EQ(ret, 0);
     ASSERT_TRUE(pp.pixels != NULL);
     ASSERT_TRUE(pp.render_bmps == NULL);  /* scale=1 uses analysis bitmaps */
     ASSERT_EQ(pp.scale, 1);
 
-    ppm_pipe_free(&pp);
+    glif_ppm_pipe_free(&pp);
     free(grid.cells);
-    char_db_free(&db);
+    glif_char_db_free(&db);
 }
 
 UTEST(output, ppm_pipe_frame_writes_valid_ppm) {
-    SamplingConfig sc;
-    sampling_config_init(&sc);
-    CharDatabase db;
-    if (char_db_create(&db, test_font(), 10, 20, &sc) != 0) return;
+    GlifSamplingConfig sc;
+    glif_sampling_config_init(&sc);
+    GlifCharDatabase db;
+    if (glif_char_db_create(&db, test_font(), 10, 20, &sc) != 0) return;
 
-    Grid grid = make_test_grid(2, 3, 10, 20, 'H');
+    GlifGrid grid = make_test_grid(2, 3, 10, 20, 'H');
 
-    PpmPipe pp;
-    ASSERT_EQ(ppm_pipe_init(&pp, &grid, &db, 1, 0), 0);
+    GlifPpmPipe pp;
+    ASSERT_EQ(glif_ppm_pipe_init(&pp, &grid, &db, 1, 0), 0);
 
     /* Capture stdout */
     const char *path = "/tmp/glif_test_pipe_frame.ppm";
@@ -543,7 +543,7 @@ UTEST(output, ppm_pipe_frame_writes_valid_ppm) {
     dup2(file_fd, STDOUT_FILENO);
     close(file_fd);
 
-    ppm_pipe_frame(&pp, &grid, &db);
+    glif_ppm_pipe_frame(&pp, &grid, &db);
 
     fflush(stdout);
     dup2(saved_fd, STDOUT_FILENO);
@@ -573,42 +573,42 @@ UTEST(output, ppm_pipe_frame_writes_valid_ppm) {
     ASSERT_EQ(file_size, expected);
 
     remove(path);
-    ppm_pipe_free(&pp);
+    glif_ppm_pipe_free(&pp);
     free(grid.cells);
-    char_db_free(&db);
+    glif_char_db_free(&db);
 }
 
 UTEST(output, ppm_pipe_dark_vs_light_differ) {
-    SamplingConfig sc;
-    sampling_config_init(&sc);
-    CharDatabase db;
-    if (char_db_create(&db, test_font(), 10, 20, &sc) != 0) return;
+    GlifSamplingConfig sc;
+    glif_sampling_config_init(&sc);
+    GlifCharDatabase db;
+    if (glif_char_db_create(&db, test_font(), 10, 20, &sc) != 0) return;
 
-    Grid grid = make_test_grid(2, 2, 10, 20, 'M');
+    GlifGrid grid = make_test_grid(2, 2, 10, 20, 'M');
 
     /* Render dark mode */
-    PpmPipe pp_dark;
-    ASSERT_EQ(ppm_pipe_init(&pp_dark, &grid, &db, 1, 1), 0);
+    GlifPpmPipe pp_dark;
+    ASSERT_EQ(glif_ppm_pipe_init(&pp_dark, &grid, &db, 1, 1), 0);
 
     const char *path_dark = "/tmp/glif_test_pipe_dark.ppm";
     fflush(stdout);
     int saved = dup(STDOUT_FILENO);
     int fd = open(path_dark, O_WRONLY | O_CREAT | O_TRUNC, 0644);
     dup2(fd, STDOUT_FILENO); close(fd);
-    ppm_pipe_frame(&pp_dark, &grid, &db);
+    glif_ppm_pipe_frame(&pp_dark, &grid, &db);
     fflush(stdout);
     dup2(saved, STDOUT_FILENO); close(saved);
 
     /* Render light mode */
-    PpmPipe pp_light;
-    ASSERT_EQ(ppm_pipe_init(&pp_light, &grid, &db, 1, 0), 0);
+    GlifPpmPipe pp_light;
+    ASSERT_EQ(glif_ppm_pipe_init(&pp_light, &grid, &db, 1, 0), 0);
 
     const char *path_light = "/tmp/glif_test_pipe_light.ppm";
     fflush(stdout);
     saved = dup(STDOUT_FILENO);
     fd = open(path_light, O_WRONLY | O_CREAT | O_TRUNC, 0644);
     dup2(fd, STDOUT_FILENO); close(fd);
-    ppm_pipe_frame(&pp_light, &grid, &db);
+    glif_ppm_pipe_frame(&pp_light, &grid, &db);
     fflush(stdout);
     dup2(saved, STDOUT_FILENO); close(saved);
 
@@ -640,26 +640,26 @@ UTEST(output, ppm_pipe_dark_vs_light_differ) {
     free(d1); free(d2);
     remove(path_dark);
     remove(path_light);
-    ppm_pipe_free(&pp_dark);
-    ppm_pipe_free(&pp_light);
+    glif_ppm_pipe_free(&pp_dark);
+    glif_ppm_pipe_free(&pp_light);
     free(grid.cells);
-    char_db_free(&db);
+    glif_char_db_free(&db);
 }
 
-/* ---- raw_pipe_frame tests ---- */
+/* ---- glif_raw_pipe_frame tests ---- */
 
 UTEST(output, raw_pipe_frame_no_ppm_header) {
-    SamplingConfig sc;
-    sampling_config_init(&sc);
-    CharDatabase db;
-    if (char_db_create(&db, test_font(), 10, 20, &sc) != 0) return;
+    GlifSamplingConfig sc;
+    glif_sampling_config_init(&sc);
+    GlifCharDatabase db;
+    if (glif_char_db_create(&db, test_font(), 10, 20, &sc) != 0) return;
 
-    Grid grid = make_test_grid(2, 3, 10, 20, 'R');
+    GlifGrid grid = make_test_grid(2, 3, 10, 20, 'R');
 
-    PpmPipe pp;
-    ASSERT_EQ(ppm_pipe_init(&pp, &grid, &db, 1, 1), 0);
+    GlifPpmPipe pp;
+    ASSERT_EQ(glif_ppm_pipe_init(&pp, &grid, &db, 1, 1), 0);
 
-    /* Capture raw_pipe_frame output */
+    /* Capture glif_raw_pipe_frame output */
     const char *path = "/tmp/glif_test_raw_frame.bin";
     fflush(stdout);
     int saved_fd = dup(STDOUT_FILENO);
@@ -667,7 +667,7 @@ UTEST(output, raw_pipe_frame_no_ppm_header) {
     dup2(file_fd, STDOUT_FILENO);
     close(file_fd);
 
-    raw_pipe_frame(&pp, &grid, &db);
+    glif_raw_pipe_frame(&pp, &grid, &db);
 
     fflush(stdout);
     dup2(saved_fd, STDOUT_FILENO);
@@ -691,25 +691,25 @@ UTEST(output, raw_pipe_frame_no_ppm_header) {
     ASSERT_TRUE(header[0] != 'P' || header[1] != '6');
 
     remove(path);
-    ppm_pipe_free(&pp);
+    glif_ppm_pipe_free(&pp);
     free(grid.cells);
-    char_db_free(&db);
+    glif_char_db_free(&db);
 }
 
 UTEST(output, ppm_pipe_render_fills_buffer) {
-    SamplingConfig sc;
-    sampling_config_init(&sc);
-    CharDatabase db;
-    if (char_db_create(&db, test_font(), 10, 20, &sc) != 0) return;
+    GlifSamplingConfig sc;
+    glif_sampling_config_init(&sc);
+    GlifCharDatabase db;
+    if (glif_char_db_create(&db, test_font(), 10, 20, &sc) != 0) return;
 
-    Grid grid = make_test_grid(2, 2, 10, 20, 'M');
+    GlifGrid grid = make_test_grid(2, 2, 10, 20, 'M');
 
-    PpmPipe pp;
-    ASSERT_EQ(ppm_pipe_init(&pp, &grid, &db, 1, 1), 0);
+    GlifPpmPipe pp;
+    ASSERT_EQ(glif_ppm_pipe_init(&pp, &grid, &db, 1, 1), 0);
 
     /* Zero out buffer, then call render */
     memset(pp.pixels, 0, pp.img_w * pp.img_h * 3);
-    ppm_pipe_render(&pp, &grid, &db);
+    glif_ppm_pipe_render(&pp, &grid, &db);
 
     /* With dark mode and colored cells (r=200,g=100,b=50), some pixels
      * should be non-zero where glyphs are rendered */
@@ -720,9 +720,9 @@ UTEST(output, ppm_pipe_render_fills_buffer) {
     }
     ASSERT_TRUE(nonzero);
 
-    ppm_pipe_free(&pp);
+    glif_ppm_pipe_free(&pp);
     free(grid.cells);
-    char_db_free(&db);
+    glif_char_db_free(&db);
 }
 
 /* ---- GlifWriter tests ---- */
@@ -787,7 +787,7 @@ UTEST(output, glif_writer_dark_flag) {
 UTEST(output, glif_writer_frames_and_size) {
     const char *path = "/tmp/glif_test_frames.glif";
     int cols = 4, rows = 3;
-    Grid grid = make_test_grid(rows, cols, 10, 20, 'X');
+    GlifGrid grid = make_test_grid(rows, cols, 10, 20, 'X');
 
     GlifWriter gw;
     ASSERT_EQ(glif_writer_init(&gw, path, cols, rows, 10, 20, 30.0f, 0), 0);
@@ -817,7 +817,7 @@ UTEST(output, glif_writer_frames_and_size) {
 UTEST(output, glif_writer_frame_data_matches_grid) {
     const char *path = "/tmp/glif_test_data.glif";
     int cols = 2, rows = 2;
-    Grid grid = make_test_grid(rows, cols, 10, 20, 'A');
+    GlifGrid grid = make_test_grid(rows, cols, 10, 20, 'A');
     /* Set distinct values per cell */
     grid.cells[0].ch = 'H'; grid.cells[0].r = 10; grid.cells[0].g = 20; grid.cells[0].b = 30;
     grid.cells[1].ch = 'i'; grid.cells[1].r = 40; grid.cells[1].g = 50; grid.cells[1].b = 60;

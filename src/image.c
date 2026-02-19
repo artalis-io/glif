@@ -6,7 +6,7 @@
 #include <math.h>
 #include <stdatomic.h>
 
-int image_load(Image *img, const char *path) {
+int glif_image_load(GlifImage *img, const char *path) {
     /* Force 3 channels (RGB) to avoid OOB on grayscale images (H6) */
     int orig_channels;
     img->pixels = stbi_load(path, &img->width, &img->height, &orig_channels, 3);
@@ -20,7 +20,7 @@ int image_load(Image *img, const char *path) {
     return 0;
 }
 
-int image_load_buffer(Image *img, const uint8_t *data, int w, int h, int channels) {
+int glif_image_load_buffer(GlifImage *img, const uint8_t *data, int w, int h, int channels) {
     if (!data || w < 1 || h < 1 || (channels != 3 && channels != 4))
         return -1;
     img->width = w;
@@ -31,7 +31,7 @@ int image_load_buffer(Image *img, const uint8_t *data, int w, int h, int channel
     return 0;
 }
 
-void image_free(Image *img) {
+void glif_image_free(GlifImage *img) {
     if (!img) return;
     if (img->pixels && img->owns_pixels) {
         stbi_image_free(img->pixels);
@@ -57,7 +57,7 @@ static void srgb_lut_init(void) {
 
 /* Recompute lightness values in-place (caller must provide pre-allocated lm->data).
  * Used in video mode to avoid per-frame malloc/free. */
-int lightness_map_update(LightnessMap *lm, const Image *img) {
+int glif_lightness_map_update(GlifLightnessMap *lm, const GlifImage *img) {
     srgb_lut_init();
 
     size_t npixels = (size_t)img->width * (size_t)img->height;
@@ -77,7 +77,7 @@ int lightness_map_update(LightnessMap *lm, const Image *img) {
     return 0;
 }
 
-int lightness_map_create(LightnessMap *lm, const Image *img) {
+int glif_lightness_map_create(GlifLightnessMap *lm, const GlifImage *img) {
     srgb_lut_init();
 
     lm->width = img->width;
@@ -108,7 +108,7 @@ static int float_cmp(const void *a, const void *b) {
     return (fa > fb) - (fa < fb);
 }
 
-void lightness_map_normalize(LightnessMap *lm) {
+void glif_lightness_map_normalize(GlifLightnessMap *lm) {
     size_t n = (size_t)lm->width * (size_t)lm->height;
     if (n < 2) return;
 
@@ -142,7 +142,7 @@ void lightness_map_normalize(LightnessMap *lm) {
     }
 }
 
-void lightness_map_free(LightnessMap *lm) {
+void glif_lightness_map_free(GlifLightnessMap *lm) {
     if (!lm) return;
     free(lm->data);
     lm->data = NULL;

@@ -24,10 +24,13 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const EXT_DIR = path.resolve(__dirname, '..');
 const TEST_PAGE = path.join(__dirname, 'test-page.html');
 
+const MANIFEST_PATH = path.join(EXT_DIR, 'manifest.json');
+
 let server;
 let browser;
 let passed = 0;
 let failed = 0;
+let originalManifest = null;
 
 function assert(condition, name) {
   if (condition) {
@@ -58,6 +61,16 @@ function startServer() {
 
 async function run() {
   console.log('\nGlif Extension Smoke Tests\n');
+
+  // Temporarily add host_permissions for testing — activeTab requires a user
+  // gesture (clicking the extension icon) which can't be simulated in Puppeteer.
+  // The published manifest uses activeTab for a clean permission prompt.
+  originalManifest = fs.readFileSync(MANIFEST_PATH, 'utf8');
+  const manifest = JSON.parse(originalManifest);
+  if (!manifest.host_permissions) {
+    manifest.host_permissions = ['<all_urls>'];
+    fs.writeFileSync(MANIFEST_PATH, JSON.stringify(manifest, null, 2) + '\n');
+  }
 
   const url = await startServer();
 
@@ -402,6 +415,7 @@ run()
     failed++;
   })
   .finally(async () => {
+    if (originalManifest) fs.writeFileSync(MANIFEST_PATH, originalManifest);
     if (browser) await browser.close();
     if (server) server.close();
     process.exit(failed > 0 ? 1 : 0);

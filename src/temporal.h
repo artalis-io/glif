@@ -1,5 +1,5 @@
-#ifndef TEMPORAL_H
-#define TEMPORAL_H
+#ifndef GLIF_TEMPORAL_H
+#define GLIF_TEMPORAL_H
 
 #include "image.h"
 #include "grid.h"
@@ -7,51 +7,51 @@
 #include "match.h"
 #include "font.h"
 
-/* ── A. NormSmoother — Smoothed normalization percentiles ── */
+/* ── A. GlifNormSmoother — Smoothed normalization percentiles ── */
 
 typedef struct {
     float smooth_p5, smooth_p95;
     int ready;
-} NormSmoother;
+} GlifNormSmoother;
 
-void norm_smoother_init(NormSmoother *ns);
-void norm_smoother_apply(NormSmoother *ns, LightnessMap *lm, float alpha);
+void glif_norm_smoother_init(GlifNormSmoother *ns);
+void glif_norm_smoother_apply(GlifNormSmoother *ns, GlifLightnessMap *lm, float alpha);
 
-/* ── B. ShapeSmoother — Temporal EMA on shape + external vectors ── */
+/* ── B. GlifShapeSmoother — Temporal EMA on shape + external vectors ── */
 
 typedef struct {
-    Vec6 *prev_shapes;
-    Vec10 *prev_externals;
+    GlifVec6 *prev_shapes;
+    GlifVec10 *prev_externals;
     int count;
     int ready;
-} ShapeSmoother;
+} GlifShapeSmoother;
 
-void shape_smoother_init(ShapeSmoother *ss);
-void shape_smoother_apply(ShapeSmoother *ss, Grid *grid, float alpha);
-void shape_smoother_free(ShapeSmoother *ss);
+void glif_shape_smoother_init(GlifShapeSmoother *ss);
+void glif_shape_smoother_apply(GlifShapeSmoother *ss, GlifGrid *grid, float alpha);
+void glif_shape_smoother_free(GlifShapeSmoother *ss);
 
-/* ── C. ContrastSmoother — Smoothed adaptive contrast stats ── */
+/* ── C. GlifContrastSmoother — Smoothed adaptive contrast stats ── */
 
 typedef struct {
     float smooth_p10, smooth_p90, smooth_avg;
     int ready;
-} ContrastSmoother;
+} GlifContrastSmoother;
 
-void contrast_smoother_init(ContrastSmoother *cs);
-void contrast_smoother_apply(ContrastSmoother *cs, AdaptiveContrast *ac,
+void glif_contrast_smoother_init(GlifContrastSmoother *cs);
+void glif_contrast_smoother_apply(GlifContrastSmoother *cs, GlifAdaptiveContrast *ac,
                              float alpha);
 
-/* ── D. MatchSmoother — Character hysteresis ── */
+/* ── D. GlifMatchSmoother — Character hysteresis ── */
 
 typedef struct {
     char *prev_chars;
     int count;
     int ready;
-} MatchSmoother;
+} GlifMatchSmoother;
 
-void match_smoother_init(MatchSmoother *ms);
-void match_smoother_apply(MatchSmoother *ms, Grid *grid,
-                          const CharDatabase *db, float hysteresis);
-void match_smoother_free(MatchSmoother *ms);
+void glif_match_smoother_init(GlifMatchSmoother *ms);
+void glif_match_smoother_apply(GlifMatchSmoother *ms, GlifGrid *grid,
+                          const GlifCharDatabase *db, float hysteresis);
+void glif_match_smoother_free(GlifMatchSmoother *ms);
 
 #endif

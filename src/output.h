@@ -1,5 +1,5 @@
-#ifndef OUTPUT_H
-#define OUTPUT_H
+#ifndef GLIF_OUTPUT_H
+#define GLIF_OUTPUT_H
 
 #include "grid.h"
 #include "font.h"
@@ -7,10 +7,10 @@
 #include <stdio.h>
 
 /* Print plain ASCII to stdout. */
-void output_plain(const Grid *grid);
+void glif_output_plain(const GlifGrid *grid);
 
 /* Print ANSI truecolor ASCII to stdout. */
-void output_ansi(const Grid *grid);
+void glif_output_ansi(const GlifGrid *grid);
 
 /* Diff-based ANSI renderer for video mode — only emits changed cells.
  * dark_mode: 0 = color background + white glyphs
@@ -21,17 +21,17 @@ typedef struct {
     uint8_t *prev;   /* previous frame: 4 bytes per cell [ch, r, g, b] */
     int cells;       /* total cell count */
     int cols;        /* grid columns (for cursor positioning) */
-} FrameDiff;
+} GlifFrameDiff;
 
-int frame_diff_init(FrameDiff *fd, int rows, int cols);
-void frame_diff_render(FrameDiff *fd, const Grid *grid, int dark_mode);
-void frame_diff_free(FrameDiff *fd);
+int glif_frame_diff_init(GlifFrameDiff *fd, int rows, int cols);
+void glif_frame_diff_render(GlifFrameDiff *fd, const GlifGrid *grid, int dark_mode);
+void glif_frame_diff_free(GlifFrameDiff *fd);
 
 /* Write PPM image file with glyph rendering.
  * scale > 1 uses high-res render bitmaps for sharp text.
  * dark_mode: 0 = color background + white glyphs (default)
  *            1 = black background + colored glyphs */
-int output_ppm(const Grid *grid, const CharDatabase *db,
+int glif_output_ppm(const GlifGrid *grid, const GlifCharDatabase *db,
                const char *path, int scale, int dark_mode);
 
 /* Streaming PPM renderer for video mode — writes PPM frames to stdout.
@@ -43,14 +43,14 @@ typedef struct {
     int rw, rh;           /* render cell dimensions */
     int scale;
     int dark_mode;
-} PpmPipe;
+} GlifPpmPipe;
 
-int ppm_pipe_init(PpmPipe *pp, const Grid *grid, const CharDatabase *db,
+int glif_ppm_pipe_init(GlifPpmPipe *pp, const GlifGrid *grid, const GlifCharDatabase *db,
                   int scale, int dark_mode);
-void ppm_pipe_render(PpmPipe *pp, const Grid *grid, const CharDatabase *db);
-void ppm_pipe_frame(PpmPipe *pp, const Grid *grid, const CharDatabase *db);
-void raw_pipe_frame(PpmPipe *pp, const Grid *grid, const CharDatabase *db);
-void ppm_pipe_free(PpmPipe *pp);
+void glif_ppm_pipe_render(GlifPpmPipe *pp, const GlifGrid *grid, const GlifCharDatabase *db);
+void glif_ppm_pipe_frame(GlifPpmPipe *pp, const GlifGrid *grid, const GlifCharDatabase *db);
+void glif_raw_pipe_frame(GlifPpmPipe *pp, const GlifGrid *grid, const GlifCharDatabase *db);
+void glif_ppm_pipe_free(GlifPpmPipe *pp);
 
 /* .glif binary format — see docs/roadmap.md for full spec. */
 #define GLIF_MAGIC "GLIF"
@@ -68,7 +68,7 @@ typedef struct {
 int  glif_writer_init(GlifWriter *gw, const char *path,
                       int cols, int rows, int cell_w, int cell_h,
                       float fps, int dark_mode);
-void glif_writer_frame(GlifWriter *gw, const Grid *grid);
+void glif_writer_frame(GlifWriter *gw, const GlifGrid *grid);
 int  glif_writer_finish(GlifWriter *gw);
 
 #endif

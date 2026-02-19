@@ -3,7 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-void output_plain(const Grid *grid) {
+void glif_output_plain(const GlifGrid *grid) {
     for (int r = 0; r < grid->rows; r++) {
         for (int c = 0; c < grid->cols; c++) {
             putchar(grid->cells[r * grid->cols + c].ch);
@@ -12,10 +12,10 @@ void output_plain(const Grid *grid) {
     }
 }
 
-void output_ansi(const Grid *grid) {
+void glif_output_ansi(const GlifGrid *grid) {
     for (int r = 0; r < grid->rows; r++) {
         for (int c = 0; c < grid->cols; c++) {
-            const GridCell *cell = &grid->cells[r * grid->cols + c];
+            const GlifGridCell *cell = &grid->cells[r * grid->cols + c];
             printf("\033[38;2;%d;%d;%dm%c",
                    cell->r, cell->g, cell->b, cell->ch);
         }
@@ -24,7 +24,7 @@ void output_ansi(const Grid *grid) {
     printf("\033[0m");
 }
 
-int frame_diff_init(FrameDiff *fd, int rows, int cols) {
+int glif_frame_diff_init(GlifFrameDiff *fd, int rows, int cols) {
     size_t cells = (size_t)rows * (size_t)cols;
     /* Worst case: every cell changed, ~48 bytes per cell + cursor moves */
     fd->bufsize = cells * 64 + (size_t)rows * 8 + 32;
@@ -38,7 +38,7 @@ int frame_diff_init(FrameDiff *fd, int rows, int cols) {
 }
 
 /* Full redraw — cursor home, emit every cell sequentially. No cursor moves needed. */
-static void frame_full_redraw(FrameDiff *fd, const Grid *grid, int dark_mode) {
+static void frame_full_redraw(GlifFrameDiff *fd, const GlifGrid *grid, int dark_mode) {
     char *p = fd->buf;
     char *end = fd->buf + fd->bufsize;
     int rows = grid->rows;
@@ -48,7 +48,7 @@ static void frame_full_redraw(FrameDiff *fd, const Grid *grid, int dark_mode) {
 
     for (int r = 0; r < rows; r++) {
         for (int c = 0; c < cols; c++) {
-            const GridCell *cell = &grid->cells[r * cols + c];
+            const GlifGridCell *cell = &grid->cells[r * cols + c];
             size_t rem = (size_t)(end - p);
             if (dark_mode) {
                 p += snprintf(p, rem, "\033[38;2;%d;%d;%dm%c",
@@ -67,7 +67,7 @@ static void frame_full_redraw(FrameDiff *fd, const Grid *grid, int dark_mode) {
     fflush(stdout);
 }
 
-void frame_diff_render(FrameDiff *fd, const Grid *grid, int dark_mode) {
+void glif_frame_diff_render(GlifFrameDiff *fd, const GlifGrid *grid, int dark_mode) {
     int rows = grid->rows;
     int cols = grid->cols;
     int total = rows * cols;
@@ -81,7 +81,7 @@ void frame_diff_render(FrameDiff *fd, const Grid *grid, int dark_mode) {
     int changed = 0, jumps = 0;
     int prev_idx = -2;  /* impossible value so first changed cell counts as jump */
     for (int i = 0; i < total; i++) {
-        const GridCell *cell = &grid->cells[i];
+        const GlifGridCell *cell = &grid->cells[i];
         uint8_t *pv = &fd->prev[i * 4];
         if (pv[0] != (uint8_t)cell->ch ||
             pv[1] != cell->r ||
@@ -98,7 +98,7 @@ void frame_diff_render(FrameDiff *fd, const Grid *grid, int dark_mode) {
     if (diff_cost >= full_cost) {
         /* Update prev buffer */
         for (int i = 0; i < total; i++) {
-            const GridCell *cell = &grid->cells[i];
+            const GlifGridCell *cell = &grid->cells[i];
             uint8_t *prev = &fd->prev[i * 4];
             prev[0] = (uint8_t)cell->ch;
             prev[1] = cell->r;
@@ -117,7 +117,7 @@ void frame_diff_render(FrameDiff *fd, const Grid *grid, int dark_mode) {
     for (int r = 0; r < rows; r++) {
         for (int c = 0; c < cols; c++) {
             int idx = r * cols + c;
-            const GridCell *cell = &grid->cells[idx];
+            const GlifGridCell *cell = &grid->cells[idx];
             uint8_t *prev = &fd->prev[idx * 4];
 
             if (prev[0] == (uint8_t)cell->ch &&
@@ -159,14 +159,14 @@ void frame_diff_render(FrameDiff *fd, const Grid *grid, int dark_mode) {
     }
 }
 
-void frame_diff_free(FrameDiff *fd) {
+void glif_frame_diff_free(GlifFrameDiff *fd) {
     free(fd->buf);
     free(fd->prev);
     fd->buf = NULL;
     fd->prev = NULL;
 }
 
-int output_ppm(const Grid *grid, const CharDatabase *db,
+int glif_output_ppm(const GlifGrid *grid, const GlifCharDatabase *db,
                const char *path, int scale, int dark_mode) {
     if (!grid || !grid->cells || !db || !path) return -1;
     if (scale < 1) scale = 1;
@@ -179,14 +179,14 @@ int output_ppm(const Grid *grid, const CharDatabase *db,
     /* Get high-res glyph bitmaps if scaled, otherwise use the analysis bitmaps */
     uint8_t **render_bmps = NULL;
     if (scale > 1) {
-        render_bmps = char_db_render_bitmaps(db, scale);
+        render_bmps = glif_char_db_render_bitmaps(db, scale);
         if (!render_bmps) return -1;
     }
 
     uint8_t *pixels = calloc(img_w * img_h * 3, 1);
     if (!pixels) {
         if (render_bmps) {
-            for (int i = 0; i < CHAR_COUNT; i++) free(render_bmps[i]);
+            for (int i = 0; i < GLIF_CHAR_COUNT; i++) free(render_bmps[i]);
             free(render_bmps);
         }
         return -1;
@@ -194,10 +194,10 @@ int output_ppm(const Grid *grid, const CharDatabase *db,
 
     for (int r = 0; r < grid->rows; r++) {
         for (int c = 0; c < grid->cols; c++) {
-            const GridCell *cell = &grid->cells[r * grid->cols + c];
+            const GlifGridCell *cell = &grid->cells[r * grid->cols + c];
 
-            int char_idx = cell->ch - CHAR_FIRST;
-            if (char_idx < 0 || char_idx >= CHAR_COUNT) char_idx = 0;
+            int char_idx = cell->ch - GLIF_CHAR_FIRST;
+            if (char_idx < 0 || char_idx >= GLIF_CHAR_COUNT) char_idx = 0;
 
             const uint8_t *bmp;
             int bw, bh;
@@ -239,7 +239,7 @@ int output_ppm(const Grid *grid, const CharDatabase *db,
     }
 
     if (render_bmps) {
-        for (int i = 0; i < CHAR_COUNT; i++) free(render_bmps[i]);
+        for (int i = 0; i < GLIF_CHAR_COUNT; i++) free(render_bmps[i]);
         free(render_bmps);
     }
 
@@ -259,7 +259,7 @@ int output_ppm(const Grid *grid, const CharDatabase *db,
     return 0;
 }
 
-int ppm_pipe_init(PpmPipe *pp, const Grid *grid, const CharDatabase *db,
+int glif_ppm_pipe_init(GlifPpmPipe *pp, const GlifGrid *grid, const GlifCharDatabase *db,
                   int scale, int dark_mode) {
     if (scale < 1) scale = 1;
     if (scale > 64) scale = 64;
@@ -275,13 +275,13 @@ int ppm_pipe_init(PpmPipe *pp, const Grid *grid, const CharDatabase *db,
 
     pp->render_bmps = NULL;
     if (scale > 1) {
-        pp->render_bmps = char_db_render_bitmaps(db, scale);
+        pp->render_bmps = glif_char_db_render_bitmaps(db, scale);
         if (!pp->render_bmps) { free(pp->pixels); pp->pixels = NULL; return -1; }
     }
     return 0;
 }
 
-void ppm_pipe_render(PpmPipe *pp, const Grid *grid, const CharDatabase *db) {
+void glif_ppm_pipe_render(GlifPpmPipe *pp, const GlifGrid *grid, const GlifCharDatabase *db) {
     int rw = pp->rw, rh = pp->rh;
     size_t img_w = pp->img_w;
     int dark_mode = pp->dark_mode;
@@ -289,9 +289,9 @@ void ppm_pipe_render(PpmPipe *pp, const Grid *grid, const CharDatabase *db) {
 
     for (int r = 0; r < grid->rows; r++) {
         for (int c = 0; c < grid->cols; c++) {
-            const GridCell *cell = &grid->cells[r * grid->cols + c];
-            int char_idx = cell->ch - CHAR_FIRST;
-            if (char_idx < 0 || char_idx >= CHAR_COUNT) char_idx = 0;
+            const GlifGridCell *cell = &grid->cells[r * grid->cols + c];
+            int char_idx = cell->ch - GLIF_CHAR_FIRST;
+            if (char_idx < 0 || char_idx >= GLIF_CHAR_COUNT) char_idx = 0;
 
             const uint8_t *bmp;
             int bw, bh;
@@ -324,25 +324,25 @@ void ppm_pipe_render(PpmPipe *pp, const Grid *grid, const CharDatabase *db) {
     }
 }
 
-void ppm_pipe_frame(PpmPipe *pp, const Grid *grid, const CharDatabase *db) {
-    ppm_pipe_render(pp, grid, db);
+void glif_ppm_pipe_frame(GlifPpmPipe *pp, const GlifGrid *grid, const GlifCharDatabase *db) {
+    glif_ppm_pipe_render(pp, grid, db);
     size_t nbytes = pp->img_w * pp->img_h * 3;
     fprintf(stdout, "P6\n%zu %zu\n255\n", pp->img_w, pp->img_h);
     if (fwrite(pp->pixels, 1, nbytes, stdout) != nbytes) return;
     fflush(stdout);
 }
 
-void raw_pipe_frame(PpmPipe *pp, const Grid *grid, const CharDatabase *db) {
-    ppm_pipe_render(pp, grid, db);
+void glif_raw_pipe_frame(GlifPpmPipe *pp, const GlifGrid *grid, const GlifCharDatabase *db) {
+    glif_ppm_pipe_render(pp, grid, db);
     size_t nbytes = pp->img_w * pp->img_h * 3;
     if (fwrite(pp->pixels, 1, nbytes, stdout) != nbytes) return;
     fflush(stdout);
 }
 
-void ppm_pipe_free(PpmPipe *pp) {
+void glif_ppm_pipe_free(GlifPpmPipe *pp) {
     free(pp->pixels);
     if (pp->render_bmps) {
-        for (int i = 0; i < CHAR_COUNT; i++) free(pp->render_bmps[i]);
+        for (int i = 0; i < GLIF_CHAR_COUNT; i++) free(pp->render_bmps[i]);
         free(pp->render_bmps);
     }
     pp->pixels = NULL;
@@ -402,11 +402,11 @@ int glif_writer_init(GlifWriter *gw, const char *path,
     return 0;
 }
 
-void glif_writer_frame(GlifWriter *gw, const Grid *grid) {
+void glif_writer_frame(GlifWriter *gw, const GlifGrid *grid) {
     if (gw->err) return;
     int total = grid->rows * grid->cols;
     for (int i = 0; i < total; i++) {
-        const GridCell *cell = &grid->cells[i];
+        const GlifGridCell *cell = &grid->cells[i];
         uint8_t data[4] = { (uint8_t)cell->ch, cell->r, cell->g, cell->b };
         if (fwrite(data, 1, 4, gw->file) != 4) { gw->err = 1; return; }
     }

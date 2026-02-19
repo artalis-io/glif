@@ -61,3 +61,55 @@ jobs:
         run: |
           test -f extension/wasm/glif-ext.js
           test -f extension/wasm/glif-ext.wasm
+
+  test-python-bindings:
+    name: Test Python bindings
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y libomp-dev fonts-dejavu-core
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Build shared library
+        run: make shared
+
+      - name: Install Python package
+        working-directory: bindings/python
+        run: pip install -e ".[dev]"
+
+      - name: Test
+        working-directory: bindings/python
+        run: pytest tests/ -v
+        env:
+          GLIF_TEST_FONT: /usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf
+          LD_LIBRARY_PATH: ${{ github.workspace }}
+
+  test-node-bindings:
+    name: Test Node.js bindings
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y libomp-dev fonts-dejavu-core
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install and build
+        working-directory: bindings/node
+        run: npm install
+
+      - name: Test
+        working-directory: bindings/node
+        run: npm test
+        env:
+          GLIF_TEST_FONT: /usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf

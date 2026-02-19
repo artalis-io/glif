@@ -15,7 +15,7 @@ static float smoothstep(float edge0, float edge1, float x) {
     return t * t * (3.0f - 2.0f * t);
 }
 
-static float cell_luminance(const GridCell *cell) {
+static float cell_luminance(const GlifGridCell *cell) {
     return (cell->r * 0.2126f + cell->g * 0.7152f + cell->b * 0.0722f)
            / 255.0f;
 }
@@ -41,7 +41,7 @@ static float quickselect(float *arr, int n, int k) {
     return arr[k];
 }
 
-void contrast_analyze_frame(AdaptiveContrast *ac, const Grid *grid) {
+void glif_contrast_analyze_frame(GlifAdaptiveContrast *ac, const GlifGrid *grid) {
     if (!ac || ac->floor < 0.0f) return;
 
     int n = grid->rows * grid->cols;
@@ -51,7 +51,7 @@ void contrast_analyze_frame(AdaptiveContrast *ac, const Grid *grid) {
     if (!lums) return;
 
     float sum = 0.0f;
-    const GridCell *cells = grid->cells;
+    const GlifGridCell *cells = grid->cells;
 
 #ifdef _OPENMP
     #pragma omp parallel for reduction(+:sum) schedule(static)
@@ -74,8 +74,8 @@ void contrast_analyze_frame(AdaptiveContrast *ac, const Grid *grid) {
 /* Compute effective crunch for a cell based on its brightness
  * relative to the frame's luminance distribution.
  * Returns base crunch when adaptive is disabled (ac == NULL or floor < 0). */
-static float effective_crunch(float crunch, const GridCell *cell,
-                              const AdaptiveContrast *ac) {
+static float effective_crunch(float crunch, const GlifGridCell *cell,
+                              const GlifAdaptiveContrast *ac) {
     if (!ac || ac->floor < 0.0f) return crunch;
 
     float lum = cell_luminance(cell);
@@ -101,20 +101,20 @@ static float effective_crunch(float crunch, const GridCell *cell,
     return 1.0f + (crunch - 1.0f) * t;
 }
 
-void contrast_directional(Grid *grid, const SamplingConfig *sc,
-                          float crunch, const AdaptiveContrast *ac) {
+void glif_contrast_directional(GlifGrid *grid, const GlifSamplingConfig *sc,
+                          float crunch, const GlifAdaptiveContrast *ac) {
     int ncells = grid->rows * grid->cols;
 
 #ifdef _OPENMP
     #pragma omp parallel for schedule(static)
 #endif
     for (int i = 0; i < ncells; i++) {
-        GridCell *cell = &grid->cells[i];
+        GlifGridCell *cell = &grid->cells[i];
         float c = effective_crunch(crunch, cell, ac);
 
         /* For each internal circle, find max of (internal, affecting externals),
          * then apply: value = (value / maxValue)^crunch * maxValue */
-        for (int s = 0; s < NUM_INTERNAL; s++) {
+        for (int s = 0; s < GLIF_NUM_INTERNAL; s++) {
             float val = cell->shape.v[s];
             float max_val = val;
 
@@ -131,19 +131,19 @@ void contrast_directional(Grid *grid, const SamplingConfig *sc,
     }
 }
 
-void contrast_global(Grid *grid, float crunch, const AdaptiveContrast *ac) {
+void glif_contrast_global(GlifGrid *grid, float crunch, const GlifAdaptiveContrast *ac) {
     int ncells = grid->rows * grid->cols;
 
 #ifdef _OPENMP
     #pragma omp parallel for schedule(static)
 #endif
     for (int i = 0; i < ncells; i++) {
-        GridCell *cell = &grid->cells[i];
+        GlifGridCell *cell = &grid->cells[i];
         float c = effective_crunch(crunch, cell, ac);
 
-        float max_c = vec6_max_component(cell->shape);
+        float max_c = glif_vec6_max_component(cell->shape);
         if (max_c > 1e-8f) {
-            for (int s = 0; s < NUM_INTERNAL; s++) {
+            for (int s = 0; s < GLIF_NUM_INTERNAL; s++) {
                 float val = cell->shape.v[s];
                 cell->shape.v[s] = powf(val / max_c, c) * max_c;
             }
