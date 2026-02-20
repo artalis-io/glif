@@ -31,7 +31,7 @@ The pipeline:
 ```bash
 make          # build glif CLI
 make wasm     # build WebAssembly (requires Emscripten)
-make test     # run unit tests (153 tests)
+make test     # run unit tests (173 tests)
 make debug    # build with AddressSanitizer + UBSan
 ```
 
@@ -90,6 +90,8 @@ A monospace TTF font is required via `-f`. The font's glyph shapes directly affe
 | `--adapt-ceil <0-255>` | Adaptive contrast ceiling | 80 |
 | `--output-glif <path>` | Video: write .glif binary file | — |
 | `--compress` | Enable deflate compression for .glif output | off |
+| `--quant <bits>` | RGB bits to keep (4–8, 8=off) | 6 with `--compress` |
+| `--threshold <n>` | Temporal snap threshold (0–255) | 4 with `--compress` |
 
 ## Video in terminal
 
@@ -188,7 +190,7 @@ Bundle a `.glif` file into a single HTML file — no server, no external depende
 ./scripts/glif-embed.sh video.glif -o embed.html   # custom output name
 ```
 
-The output HTML inlines the WASM binary, JS player, and `.glif` data as base64. Opens directly in any browser with auto-play and HDR toggle.
+The output HTML inlines the WASM binary, JS player, and `.glif` data (base64-encoded) into a single file. Opens directly in any browser with auto-play and HDR toggle.
 
 **Programmatic API (`web/glif-player.js`):**
 
@@ -213,6 +215,10 @@ player.destroy();
 ```
 
 The compressed format uses per-frame optimal codec selection — each frame is encoded with whichever of 7 deflate-based codecs (plain, delta, filtered, palette, planar, and their delta variants) produces the smallest output. Delta variants use the previous frame as reference; scene changes naturally fall back to non-delta keyframes.
+
+When `--compress` is enabled, two lossy preprocessing steps are applied by default to dramatically improve compression (override with `--quant 8 --threshold 0` to disable):
+- **Color quantization** (`--quant 6`) — Drops 2 LSBs per RGB channel, creating more repeated values for deflate
+- **Temporal thresholding** (`--threshold 4`) — Snaps cells whose RGB changed by ≤4 per channel to the previous frame, reducing noisy delta changes from ~79% to ~40% of cells
 
 ## Virtual webcam
 
@@ -369,7 +375,7 @@ web/                  Web frontend and player
   glif-player-wasm.js   WASM player module (built by make wasm-player)
 
 vendor/               Vendored single-header libraries (stb, Nuklear, Clay, utest.h)
-tests/                Unit tests (153 tests across 11 test files)
+tests/                Unit tests (173 tests across 11 test files)
 scripts/              Convenience scripts for transcoding, webcam, and embed
 tools/                Benchmark and diagnostic tools
 ```
@@ -420,11 +426,11 @@ make tools/bench
 ## Testing
 
 ```bash
-make test         # 153 C unit tests across 11 modules
+make test         # 173 C unit tests across 11 modules
 npm run test:ext  # Chrome extension smoke tests (requires npm install)
 ```
 
-C tests cover all pipeline stages: vector math, sampling, image loading, grid computation, contrast enhancement, character matching, output formats, temporal smoothing, deflate compression codecs, and .glif round-trip encoding/decoding. Uses [Sheredom's utest.h](https://github.com/sheredom/utest.h) framework.
+C tests cover all pipeline stages: vector math, sampling, image loading, grid computation, contrast enhancement, character matching, output formats (including lossy preprocessing round-trips), temporal smoothing, deflate compression codecs, and .glif round-trip encoding/decoding. Uses [Sheredom's utest.h](https://github.com/sheredom/utest.h) framework.
 
 Extension tests use Puppeteer to launch Chrome with the extension loaded, navigate to a test page with a synthetic video, and verify the full overlay lifecycle: injection, overlay creation, WebGL context, params/hi-res updates, disable/re-enable, SPA navigation (`pushState`), and `replaceState` no-op.
 

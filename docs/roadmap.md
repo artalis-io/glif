@@ -106,7 +106,31 @@ Frame types (even = keyframe, odd = delta/P-frame):
 | `0x06` | **Planar+Deflate** — Deflate each of the 4 channel planes independently |
 | `0x07` | **Delta+Planar+Deflate** — XOR with prev, then per-plane deflate |
 
-The encoder tries all applicable codecs per frame and picks the smallest. Delta variants are skipped for the first frame (no previous reference). On scene changes, delta costs spike and non-delta codecs naturally win — those frames serve as keyframes. Achieves ~2x compression on typical video content.
+The encoder tries all applicable codecs per frame and picks the smallest. Delta variants are skipped for the first frame (no previous reference). On scene changes, delta costs spike and non-delta codecs naturally win — those frames serve as keyframes.
+
+### Lossy Preprocessing ✅
+
+Two encoder-side preprocessing steps that push compression from ~2x to ~5x on typical video content. Both are enabled by default when `--compress` is active — no format changes, decoder untouched.
+
+**Color quantization** (`--quant <bits>`, default 6 with `--compress`):
+- Drops N LSBs per RGB channel: `value &= 0xFF << (8 - bits)`
+- Creates more repeated byte values, deflate compresses dramatically better
+- Imperceptible for ASCII art — the visual difference between `rgb(100,150,200)` and `rgb(100,148,200)` is invisible at cell granularity
+
+**Temporal thresholding** (`--threshold <n>`, default 4 with `--compress`):
+- Snaps cells whose per-channel RGB diff is ≤ threshold to previous frame values
+- Only snaps when the character is identical — character changes reflect meaningful shape transitions
+- Reduces "changed" cells from ~79% to ~40%, massively improving delta codecs
+- Comparison is against the previous frame's final (quantized+thresholded) values, so it's apples-to-apples
+
+**Results on hk421.mp4 (213×44 grid, 4633 frames, 30fps):**
+| Configuration | Size | Ratio |
+|--------------|------|-------|
+| Raw (uncompressed) | ~172 MB | 1.0x |
+| Deflate only | 122.5 MB | ~1.4x |
+| Deflate + quant 6 + threshold 4 | 32.2 MB | ~5.3x |
+
+Override with `--quant 8 --threshold 0` to disable lossy preprocessing while keeping deflate compression.
 
 ### `.glif` Decoder (GlifReader) ✅
 
@@ -157,7 +181,7 @@ Bundle a `.glif` file + WASM player into a single self-contained HTML file that 
 ```
 
 **How it works:**
-- Base64-encodes the `.wasm` binary and `.glif` data inline
+- Base64-encodes the `.wasm` binary and `.glif` data directly (no outer gzip — `.glif` frames are already deflate-compressed internally)
 - Inlines the Emscripten JS loader and player logic
 - Passes `wasmBinary` to the Emscripten factory to avoid external fetches
 - Auto-plays on load with full player controls (play/pause, seek, speed, fullscreen)
