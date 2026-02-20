@@ -31,7 +31,7 @@ The pipeline:
 ```bash
 make          # build glif CLI
 make wasm     # build WebAssembly (requires Emscripten)
-make test     # run unit tests (166 tests)
+make test     # run unit tests (153 tests)
 make debug    # build with AddressSanitizer + UBSan
 ```
 
@@ -89,7 +89,7 @@ A monospace TTF font is required via `-f`. The font's glyph shapes directly affe
 | `--adapt-floor <0-255>` | Adaptive contrast noise floor | off |
 | `--adapt-ceil <0-255>` | Adaptive contrast ceiling | 80 |
 | `--output-glif <path>` | Video: write .glif binary file | — |
-| `--compress` | Enable v2 compression for .glif output | off |
+| `--compress` | Enable deflate compression for .glif output | off |
 
 ## Video in terminal
 
@@ -154,7 +154,7 @@ Capture video as a compact `.glif` binary file, then play it back in the browser
 **Capture:**
 
 ```bash
-# Capture video to .glif with v2 compression (RLE + delta)
+# Capture video to .glif with deflate compression
 ffmpeg -i video.mp4 -f rawvideo -pix_fmt rgb24 -s 640x480 - 2>/dev/null | \
   ./glif --video 640 480 -f fonts/GeistPixel-Square.ttf --output-glif output.glif --compress --fps 30
 
@@ -212,7 +212,7 @@ player.setHDR(0.7);    // 0.0 (off) to 1.0 (full effect)
 player.destroy();
 ```
 
-The v2 format uses per-frame compression — each frame is encoded with whichever of raw, RLE, delta, or delta+RLE produces the smallest output. Delta variants use the previous frame as reference; scene changes naturally fall back to raw/RLE keyframes.
+The compressed format uses per-frame optimal codec selection — each frame is encoded with whichever of 7 deflate-based codecs (plain, delta, filtered, palette, planar, and their delta variants) produces the smallest output. Delta variants use the previous frame as reference; scene changes naturally fall back to non-delta keyframes.
 
 ## Virtual webcam
 
@@ -332,8 +332,8 @@ src/
   contrast.c/h      Directional + global + adaptive contrast enhancement
   match.c/h         Nearest-neighbor character matching with LRU cache
   output.c/h        Plain, ANSI, PPM, raw pipe, .glif binary writer
-  compress.c/h      RLE, delta, and delta+RLE compression codecs
-  glif.c/h          .glif binary decoder (GlifReader) — v1 and v2
+  compress.c/h      Deflate-based compression codecs (7 frame types)
+  glif.c/h          .glif binary decoder (GlifReader)
   temporal.c/h      Temporal smoothing (normalization, shape, contrast, hysteresis)
   vec6.h            Header-only 6D/10D vector math
   main.c            CLI entry point
@@ -369,9 +369,9 @@ web/                  Web frontend and player
   glif-player-wasm.js   WASM player module (built by make wasm-player)
 
 vendor/               Vendored single-header libraries (stb, Nuklear, Clay, utest.h)
-tests/                Unit tests (166 tests across 11 test files)
+tests/                Unit tests (153 tests across 11 test files)
 scripts/              Convenience scripts for transcoding, webcam, and embed
-tools/                Benchmark tool
+tools/                Benchmark and diagnostic tools
 ```
 
 ### Rendering pipeline
@@ -394,7 +394,7 @@ Input image/frame
        |
   Nearest-neighbor match in 6D space -> character
        |
-  Output: ASCII | ANSI | PPM | raw | .glif (v1/v2) | WebGL
+  Output: ASCII | ANSI | PPM | raw | .glif | WebGL
 ```
 
 ## Performance
@@ -420,11 +420,11 @@ make tools/bench
 ## Testing
 
 ```bash
-make test         # 166 C unit tests across 11 modules
+make test         # 153 C unit tests across 11 modules
 npm run test:ext  # Chrome extension smoke tests (requires npm install)
 ```
 
-C tests cover all pipeline stages: vector math, sampling, image loading, grid computation, contrast enhancement, character matching, output formats, temporal smoothing, compression codecs, and .glif round-trip encoding/decoding. Uses [Sheredom's utest.h](https://github.com/sheredom/utest.h) framework.
+C tests cover all pipeline stages: vector math, sampling, image loading, grid computation, contrast enhancement, character matching, output formats, temporal smoothing, deflate compression codecs, and .glif round-trip encoding/decoding. Uses [Sheredom's utest.h](https://github.com/sheredom/utest.h) framework.
 
 Extension tests use Puppeteer to launch Chrome with the extension loaded, navigate to a test page with a synthetic video, and verify the full overlay lifecycle: injection, overlay creation, WebGL context, params/hi-res updates, disable/re-enable, SPA navigation (`pushState`), and `replaceState` no-op.
 

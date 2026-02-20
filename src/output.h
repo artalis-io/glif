@@ -54,21 +54,18 @@ void glif_ppm_pipe_free(GlifPpmPipe *pp);
 
 /* .glif binary format — see docs/roadmap.md for full spec. */
 #define GLIF_MAGIC "GLIF"
-#define GLIF_VERSION_1       1
-#define GLIF_VERSION_2       2
-#define GLIF_VERSION_3       3
+#define GLIF_VERSION         1
 #define GLIF_HEADER_SIZE 24
 #define GLIF_FLAG_DARK       0x01
 #define GLIF_FLAG_COMPRESSED 0x02
-#define GLIF_FLAG_BLOCKS     0x04
 
 typedef struct {
     FILE *file;
     uint32_t frames;
     int cells;        /* cols × rows */
-    int cols, rows;   /* grid dimensions (for block delta) */
+    int cols, rows;   /* grid dimensions (for filtered codecs) */
     int err;          /* sticky write-error flag */
-    /* v2/v3 compression (all NULL when v1) */
+    /* compression buffers (all NULL when uncompressed) */
     int compressed;
     uint8_t *prev;      /* previous decoded frame, cells*4 */
     uint8_t *cur;       /* flattened current frame, cells*4 */
@@ -77,6 +74,7 @@ typedef struct {
     size_t enc_cap;
     uint8_t *enc_buf2;  /* second encoding buffer for trying v3 codecs */
     size_t enc_cap2;
+    int keyframe_interval; /* 0 = auto, >0 = force keyframe every N frames */
 } GlifWriter;
 
 int  glif_writer_init(GlifWriter *gw, const char *path,
@@ -85,6 +83,7 @@ int  glif_writer_init(GlifWriter *gw, const char *path,
 int  glif_writer_init_v2(GlifWriter *gw, const char *path,
                          int cols, int rows, int cell_w, int cell_h,
                          float fps, int dark_mode, int compressed);
+void glif_writer_set_keyframe_interval(GlifWriter *gw, int interval);
 void glif_writer_frame(GlifWriter *gw, const GlifGrid *grid);
 int  glif_writer_finish(GlifWriter *gw);
 

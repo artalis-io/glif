@@ -32,8 +32,8 @@ Compact per-frame capture for offline storage and replay. `--output-glif <path>`
 Header (24 bytes, little-endian):
   Offset  Size  Field
   0       4     magic:    "GLIF"
-  4       1     version:  uint8    (currently 1)
-  5       1     flags:    uint8    (bit 0: dark_mode)
+  4       1     version:  uint8    (1)
+  5       1     flags:    uint8    (bit 0: dark_mode, bit 1: compressed)
   6       2     cols:     uint16
   8       2     rows:     uint16
   10      2     cell_w:   uint16
@@ -42,8 +42,8 @@ Header (24 bytes, little-endian):
   18      4     frames:   uint32   (written on finish)
   22      2     reserved: uint16   (zero)
 
-Per frame (cols × rows × 4 bytes):
-  [ch, r, g, b] per cell
+Uncompressed: per frame = cols × rows × 4 bytes [ch, r, g, b]
+Compressed:   per frame = 5-byte envelope [type(u8), size(u32 LE)] + payload
 ```
 
 ### WASM + Web Frontend ✅
@@ -89,30 +89,33 @@ Override `navigator.mediaDevices.getUserMedia` to process webcam frames through 
 
 Puppeteer-based smoke tests (`npm run test:ext`) that load the extension in a real Chrome instance with a synthetic video (canvas `captureStream`). Verifies: script injection, overlay creation/removal, WebGL context, params, hi-res, disable/re-enable, SPA `pushState` navigation, and `replaceState` no-op.
 
-### .glif v2 Compression ✅
+### `.glif` Compression ✅
 
-RLE + delta frame compression for the `.glif` binary format. Enabled with `--compress` flag (requires `--output-glif`). Header version bumps to 2 with `GLIF_FLAG_COMPRESSED` (0x02). Without `--compress`, output is identical to v1.
+Deflate-based frame compression for the `.glif` binary format. Enabled with `--compress` flag (requires `--output-glif`). Sets `GLIF_FLAG_COMPRESSED` (0x02) in the header flags. Without `--compress`, frames are stored as raw `[ch, r, g, b]` cells.
 
 **Per-frame envelope** (5 bytes): `[frame_type(u8), payload_size(u32 LE)]`
 
-Frame types (composable bit flags):
+Frame types (even = keyframe, odd = delta/P-frame):
 | Type | Encoding |
 |------|----------|
-| `0x00` | Raw — identical to v1 frame layout |
-| `0x01` | Delta — `[num_changes(u32), per change: index(u16), ch, r, g, b]` |
-| `0x02` | RLE — `[count(u8, 1-255), ch, r, g, b]` runs |
-| `0x03` | Delta+RLE — XOR with previous frame, then RLE |
+| `0x00` | **Deflate** — Deinterleave `[ch,r,g,b]` into 4 planes, single deflate stream |
+| `0x01` | **Delta+Deflate** — XOR with previous frame, then deflate |
+| `0x02` | **Filtered+Deflate** — PNG-style adaptive row filters (None/Sub/Up/Avg/Paeth) per plane, then deflate |
+| `0x03` | **Delta+Filtered+Deflate** — XOR with prev, then filtered deflate |
+| `0x04` | **Palette+Deflate** — Build RGB palette (≤256 colors), encode as char+index pairs, deflate |
+| `0x06` | **Planar+Deflate** — Deflate each of the 4 channel planes independently |
+| `0x07` | **Delta+Planar+Deflate** — XOR with prev, then per-plane deflate |
 
-The encoder tries all applicable methods per frame and picks the smallest. Delta variants are skipped for the first frame (no previous reference). On scene changes, delta costs spike and raw/RLE naturally wins — those frames implicitly serve as keyframes. Bit 2 (0x04) is reserved for future deflate.
+The encoder tries all applicable codecs per frame and picks the smallest. Delta variants are skipped for the first frame (no previous reference). On scene changes, delta costs spike and non-delta codecs naturally win — those frames serve as keyframes. Achieves ~2x compression on typical video content.
 
-### .glif Decoder (GlifReader) ✅
+### `.glif` Decoder (GlifReader) ✅
 
-Memory-buffer-based decoder for the `.glif` binary format. Reads v1 (raw) and v2 (compressed) files without `FILE*` — WASM-compatible. Depends only on `compress.c`.
+Memory-buffer-based decoder for the `.glif` binary format. Reads raw and compressed files without `FILE*` — WASM-compatible. Depends only on `compress.c` and vendored miniz.
 
 - **Sequential fast-path** — When decoding frame N after frame N-1, no walk-back needed; delta frames decode directly against the previous frame buffer
 - **Random access** — For arbitrary seeks, finds the nearest preceding non-delta keyframe and decodes forward through the target frame
-- **Frame index** — Built on `glif_reader_open`: v1 uses fixed offsets, v2 walks 5-byte envelopes sequentially
-- **Round-trip verified** — Unit tests write with `GlifWriter`, read with `GlifReader`, and verify byte-exact match for all frame types (raw, RLE, delta, delta+RLE)
+- **Frame index** — Built on `glif_reader_open`: uncompressed uses fixed offsets, compressed walks 5-byte envelopes sequentially
+- **Round-trip verified** — Unit tests write with `GlifWriter`, read with `GlifReader`, and verify byte-exact match for all frame types
 
 ### .glif Player (WASM) ✅
 

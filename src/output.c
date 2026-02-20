@@ -402,10 +402,11 @@ int glif_writer_init_v2(GlifWriter *gw, const char *path,
     gw->enc_cap = 0;
     gw->enc_buf2 = NULL;
     gw->enc_cap2 = 0;
+    gw->keyframe_interval = 0;
 
-    uint8_t version = compressed ? GLIF_VERSION_3 : GLIF_VERSION_1;
+    uint8_t version = GLIF_VERSION;
     uint8_t flags = dark_mode ? GLIF_FLAG_DARK : 0;
-    if (compressed) flags |= GLIF_FLAG_COMPRESSED | GLIF_FLAG_BLOCKS;
+    if (compressed) flags |= GLIF_FLAG_COMPRESSED;
 
     /* Write header (24 bytes) */
     int e = 0;
@@ -418,9 +419,8 @@ int glif_writer_init_v2(GlifWriter *gw, const char *path,
     e |= write_u16(gw->file, (uint16_t)cell_h);
     e |= write_f32(gw->file, fps);
     e |= write_u32(gw->file, 0);                  /* frames (placeholder) */
-    /* reserved[0] = block_w, reserved[1] = block_h (v3) */
-    e |= write_u8(gw->file, compressed ? GLIF_BLOCK_SIZE : 0);
-    e |= write_u8(gw->file, compressed ? GLIF_BLOCK_SIZE : 0);
+    e |= write_u8(gw->file, 0);    /* reserved */
+    e |= write_u8(gw->file, 0);
     if (e) { gw->err = 1; }
 
     /* Allocate compression buffers */
@@ -429,17 +429,15 @@ int glif_writer_init_v2(GlifWriter *gw, const char *path,
         gw->prev = calloc(buf_size, 1);
         gw->cur = malloc(buf_size);
         gw->work = malloc(buf_size);
-        /* Worst case across all codecs */
-        size_t rle_b = glif_compress_rle_bound(gw->cells);
-        size_t delta_b = glif_compress_delta_bound(gw->cells);
-        size_t planar_b = glif_compress_planar_rle_bound(gw->cells);
-        size_t block_b = glif_compress_block_delta_bound(cols, rows);
+        /* Worst case across all deflate codecs */
         size_t deflate_b = glif_compress_deflate_bound(gw->cells);
-        gw->enc_cap = rle_b;
-        if (delta_b > gw->enc_cap) gw->enc_cap = delta_b;
-        if (planar_b > gw->enc_cap) gw->enc_cap = planar_b;
-        if (block_b > gw->enc_cap) gw->enc_cap = block_b;
-        if (deflate_b > gw->enc_cap) gw->enc_cap = deflate_b;
+        size_t filt_b = glif_compress_filtered_deflate_bound(cols, rows);
+        size_t pal_b = glif_compress_palette_deflate_bound(gw->cells);
+        size_t pld_b = glif_compress_planar_deflate_bound(gw->cells);
+        gw->enc_cap = deflate_b;
+        if (filt_b > gw->enc_cap) gw->enc_cap = filt_b;
+        if (pal_b > gw->enc_cap) gw->enc_cap = pal_b;
+        if (pld_b > gw->enc_cap) gw->enc_cap = pld_b;
         gw->enc_buf = malloc(gw->enc_cap);
         /* Second buffer so we can try multiple codecs without re-encoding */
         gw->enc_cap2 = gw->enc_cap;
@@ -458,6 +456,10 @@ int glif_writer_init_v2(GlifWriter *gw, const char *path,
     return 0;
 }
 
+void glif_writer_set_keyframe_interval(GlifWriter *gw, int interval) {
+    gw->keyframe_interval = interval > 0 ? interval : 0;
+}
+
 void glif_writer_frame(GlifWriter *gw, const GlifGrid *grid) {
     if (gw->err) return;
     int total = grid->rows * grid->cols;
@@ -473,7 +475,7 @@ void glif_writer_frame(GlifWriter *gw, const GlifGrid *grid) {
         return;
     }
 
-    /* v2/v3 path: flatten grid to cur, try all encodings, pick smallest */
+    /* Flatten grid to cur, try all encodings, pick smallest */
     for (int i = 0; i < total; i++) {
         const GlifGridCell *cell = &grid->cells[i];
         gw->cur[i * 4]     = (uint8_t)cell->ch;
@@ -482,73 +484,101 @@ void glif_writer_frame(GlifWriter *gw, const GlifGrid *grid) {
         gw->cur[i * 4 + 3] = cell->b;
     }
 
-    int raw_size = total * 4;
-    int best_size = raw_size;
-    uint8_t best_type = GLIF_FRAME_RAW;
-    const uint8_t *best_data = gw->cur;
-    /* Track which buffer holds the best encoding */
-    int best_in_buf2 = 0;
+    int best_size = 0x7FFFFFFF;
+    uint8_t best_type = GLIF_FRAME_DEFLATE;
+    const uint8_t *best_data = gw->enc_buf;
 
-    /* Try deflate (keyframe — usually the best keyframe codec) */
+    /* Determine if this frame must be a keyframe */
+    int force_keyframe = (gw->keyframe_interval > 0 &&
+                          (gw->frames == 0 ||
+                           (int)gw->frames % gw->keyframe_interval == 0));
+    int allow_delta = (gw->frames > 0 && !force_keyframe);
+
+    /* --- Keyframe codecs --- */
+
+    /* Filtered deflate (usually best keyframe codec) */
+    int fd_size = glif_compress_filtered_deflate_encode(gw->cur, gw->cols, gw->rows,
+                                                         gw->enc_buf, gw->enc_cap);
+    if (fd_size > 0 && fd_size < best_size) {
+        best_size = fd_size;
+        best_type = GLIF_FRAME_FILTERED_DEFLATE;
+    }
+
+    /* Plain deflate keyframe */
     int deflate_size = glif_compress_deflate_encode(gw->cur, total,
-                                                    gw->enc_buf, gw->enc_cap);
+                                                    gw->enc_buf2, gw->enc_cap2);
     if (deflate_size > 0 && deflate_size < best_size) {
         best_size = deflate_size;
         best_type = GLIF_FRAME_DEFLATE;
-        best_in_buf2 = 0;
     }
 
-    /* Try delta variants only after first frame */
-    if (gw->frames > 0) {
-        /* Try delta+deflate (usually the best P-frame codec) */
+    /* Palette deflate (returns -1 if >256 unique colors) */
+    int pal_size = glif_compress_palette_deflate_encode(gw->cur, total,
+                                                         gw->enc_buf, gw->enc_cap);
+    if (pal_size > 0 && pal_size < best_size) {
+        best_size = pal_size;
+        best_type = GLIF_FRAME_PALETTE_DEFLATE;
+    }
+
+    /* Per-plane separate deflate */
+    int pld_size = glif_compress_planar_deflate_encode(gw->cur, total,
+                                                        gw->enc_buf2, gw->enc_cap2);
+    if (pld_size > 0 && pld_size < best_size) {
+        best_size = pld_size;
+        best_type = GLIF_FRAME_PLANAR_DEFLATE;
+    }
+
+    /* --- Delta codecs (only after first frame, not on forced keyframes) --- */
+    if (allow_delta) {
+        /* Delta + filtered deflate (usually best P-frame codec) */
+        int dfd_size = glif_compress_delta_filtered_deflate_encode(
+            gw->cur, gw->prev, gw->cols, gw->rows, gw->enc_buf, gw->enc_cap);
+        if (dfd_size > 0 && dfd_size < best_size) {
+            best_size = dfd_size;
+            best_type = GLIF_FRAME_DELTA_FILTERED_DEFLATE;
+        }
+
+        /* Delta + deflate */
         int dd_size = glif_compress_delta_deflate_encode(gw->cur, gw->prev, total,
                                                           gw->work, gw->enc_buf2,
                                                           gw->enc_cap2);
         if (dd_size > 0 && dd_size < best_size) {
             best_size = dd_size;
             best_type = GLIF_FRAME_DELTA_DEFLATE;
-            best_in_buf2 = 1;
         }
 
-        /* Try planar delta+RLE */
-        int pd_size = glif_compress_planar_delta_rle_encode(gw->cur, gw->prev, total,
-                                                             gw->enc_buf, gw->enc_cap);
-        if (pd_size > 0 && pd_size < best_size) {
-            best_size = pd_size;
-            best_type = GLIF_FRAME_PLANAR_DELTA_RLE;
-            best_in_buf2 = 0;
-        }
-
-        /* Try block delta */
-        int bd_size = glif_compress_block_delta_encode(gw->cur, gw->prev,
-                                                       gw->cols, gw->rows,
-                                                       gw->enc_buf2, gw->enc_cap2);
-        if (bd_size > 0 && bd_size < best_size) {
-            best_size = bd_size;
-            best_type = GLIF_FRAME_BLOCK_DELTA;
-            best_in_buf2 = 1;
-        }
-
-        /* Try legacy delta (only for small grids with u16 indices) */
-        if (total <= 65535) {
-            int delta_size = glif_compress_delta_encode(gw->cur, gw->prev, total,
-                                                        gw->enc_buf, gw->enc_cap);
-            if (delta_size > 0 && delta_size < best_size) {
-                best_size = delta_size;
-                best_type = GLIF_FRAME_DELTA;
-                best_in_buf2 = 0;
-            }
+        /* Delta + per-plane separate deflate */
+        int dpd_size = glif_compress_delta_planar_deflate_encode(gw->cur, gw->prev, total,
+                                                                  gw->enc_buf, gw->enc_cap);
+        if (dpd_size > 0 && dpd_size < best_size) {
+            best_size = dpd_size;
+            best_type = GLIF_FRAME_DELTA_PLANAR_DEFLATE;
         }
     }
 
     /* Re-encode the winner into enc_buf (the selection loop may have
      * overwritten the buffer that held the winning encoding) */
     switch (best_type) {
-    case GLIF_FRAME_RAW:
-        best_data = gw->cur;
+    case GLIF_FRAME_FILTERED_DEFLATE:
+        glif_compress_filtered_deflate_encode(gw->cur, gw->cols, gw->rows,
+                                              gw->enc_buf, gw->enc_cap);
+        best_data = gw->enc_buf;
         break;
     case GLIF_FRAME_DEFLATE:
         glif_compress_deflate_encode(gw->cur, total, gw->enc_buf, gw->enc_cap);
+        best_data = gw->enc_buf;
+        break;
+    case GLIF_FRAME_PALETTE_DEFLATE:
+        glif_compress_palette_deflate_encode(gw->cur, total, gw->enc_buf, gw->enc_cap);
+        best_data = gw->enc_buf;
+        break;
+    case GLIF_FRAME_PLANAR_DEFLATE:
+        glif_compress_planar_deflate_encode(gw->cur, total, gw->enc_buf, gw->enc_cap);
+        best_data = gw->enc_buf;
+        break;
+    case GLIF_FRAME_DELTA_FILTERED_DEFLATE:
+        glif_compress_delta_filtered_deflate_encode(gw->cur, gw->prev, gw->cols, gw->rows,
+                                                    gw->enc_buf, gw->enc_cap);
         best_data = gw->enc_buf;
         break;
     case GLIF_FRAME_DELTA_DEFLATE:
@@ -556,22 +586,13 @@ void glif_writer_frame(GlifWriter *gw, const GlifGrid *grid) {
                                            gw->work, gw->enc_buf, gw->enc_cap);
         best_data = gw->enc_buf;
         break;
-    case GLIF_FRAME_PLANAR_DELTA_RLE:
-        glif_compress_planar_delta_rle_encode(gw->cur, gw->prev, total,
-                                              gw->enc_buf, gw->enc_cap);
-        best_data = gw->enc_buf;
-        break;
-    case GLIF_FRAME_BLOCK_DELTA:
-        glif_compress_block_delta_encode(gw->cur, gw->prev, gw->cols, gw->rows,
-                                         gw->enc_buf, gw->enc_cap);
-        best_data = gw->enc_buf;
-        break;
-    case GLIF_FRAME_DELTA:
-        glif_compress_delta_encode(gw->cur, gw->prev, total, gw->enc_buf, gw->enc_cap);
+    case GLIF_FRAME_DELTA_PLANAR_DEFLATE:
+        glif_compress_delta_planar_deflate_encode(gw->cur, gw->prev, total,
+                                                  gw->enc_buf, gw->enc_cap);
         best_data = gw->enc_buf;
         break;
     default:
-        best_data = gw->cur;
+        best_data = gw->enc_buf;
         break;
     }
 

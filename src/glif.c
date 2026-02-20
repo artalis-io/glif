@@ -37,13 +37,8 @@ int glif_reader_open(GlifReader *gr, const uint8_t *data, size_t len) {
     gr->header.cell_h  = rd_u16(data + 12);
     gr->header.fps     = rd_f32(data + 14);
     gr->header.frames  = rd_u32(data + 18);
-    gr->header.block_w = data[22];
-    gr->header.block_h = data[23];
-    /* Default block size for v3 if not specified */
-    if (gr->header.version >= 3 && gr->header.block_w == 0)
-        gr->header.block_w = GLIF_BLOCK_SIZE;
-    if (gr->header.version >= 3 && gr->header.block_h == 0)
-        gr->header.block_h = GLIF_BLOCK_SIZE;
+    gr->header.reserved[0] = data[22];
+    gr->header.reserved[1] = data[23];
 
     gr->cells = (int)gr->header.cols * (int)gr->header.rows;
 
@@ -58,8 +53,8 @@ int glif_reader_open(GlifReader *gr, const uint8_t *data, size_t len) {
     /* Build frame index */
     size_t pos = GLIF_HEADER_SIZE;
 
-    if (gr->header.version == GLIF_VERSION_1) {
-        /* v1: fixed-size raw frames */
+    if (!(gr->header.flags & GLIF_FLAG_COMPRESSED)) {
+        /* Uncompressed: fixed-size raw frames */
         size_t frame_size = (size_t)gr->cells * 4;
         for (uint32_t i = 0; i < gr->header.frames; i++) {
             if (pos + frame_size > len) {
@@ -68,12 +63,12 @@ int glif_reader_open(GlifReader *gr, const uint8_t *data, size_t len) {
                 return -1;
             }
             gr->index[i].offset = pos;
-            gr->index[i].type = GLIF_FRAME_RAW;
+            gr->index[i].type = 0xFF;  /* raw (no codec) */
             gr->index[i].payload_len = (uint32_t)frame_size;
             pos += frame_size;
         }
     } else {
-        /* v2/v3: walk 5-byte envelopes */
+        /* Compressed: walk 5-byte envelopes */
         for (uint32_t i = 0; i < gr->header.frames; i++) {
             if (pos + 5 > len) {
                 free(gr->index);
@@ -116,32 +111,29 @@ static int decode_single(GlifReader *gr, uint32_t frame) {
     int cells = gr->cells;
 
     switch (fi->type) {
-    case GLIF_FRAME_RAW:
+    case 0xFF:  /* raw (uncompressed) */
         if (plen != (size_t)cells * 4) return -1;
         memcpy(gr->decoded, payload, plen);
         return 0;
-    case GLIF_FRAME_RLE:
-        return glif_compress_rle_decode(payload, plen, gr->decoded, cells);
-    case GLIF_FRAME_DELTA:
-        return glif_compress_delta_decode(payload, plen, gr->prev,
-                                          gr->decoded, cells);
-    case GLIF_FRAME_DELTA_RLE:
-        return glif_compress_delta_rle_decode(payload, plen, gr->prev,
-                                              gr->work, gr->decoded, cells);
     case GLIF_FRAME_DEFLATE:
         return glif_compress_deflate_decode(payload, plen, gr->decoded, cells);
-    case GLIF_FRAME_PLANAR_RLE:
-        return glif_compress_planar_rle_decode(payload, plen, gr->decoded, cells);
-    case GLIF_FRAME_PLANAR_DELTA_RLE:
-        return glif_compress_planar_delta_rle_decode(payload, plen, gr->prev,
-                                                      gr->decoded, cells);
-    case GLIF_FRAME_BLOCK_DELTA:
-        return glif_compress_block_delta_decode(payload, plen, gr->prev,
-                                                gr->decoded,
-                                                gr->header.cols, gr->header.rows);
     case GLIF_FRAME_DELTA_DEFLATE:
         return glif_compress_delta_deflate_decode(payload, plen, gr->prev,
                                                    gr->work, gr->decoded, cells);
+    case GLIF_FRAME_FILTERED_DEFLATE:
+        return glif_compress_filtered_deflate_decode(payload, plen, gr->decoded,
+                                                      gr->header.cols, gr->header.rows);
+    case GLIF_FRAME_DELTA_FILTERED_DEFLATE:
+        return glif_compress_delta_filtered_deflate_decode(payload, plen, gr->prev,
+                                                            gr->decoded,
+                                                            gr->header.cols, gr->header.rows);
+    case GLIF_FRAME_PALETTE_DEFLATE:
+        return glif_compress_palette_deflate_decode(payload, plen, gr->decoded, cells);
+    case GLIF_FRAME_PLANAR_DEFLATE:
+        return glif_compress_planar_deflate_decode(payload, plen, gr->decoded, cells);
+    case GLIF_FRAME_DELTA_PLANAR_DEFLATE:
+        return glif_compress_delta_planar_deflate_decode(payload, plen, gr->prev,
+                                                          gr->decoded, cells);
     default:
         return -1;
     }
@@ -149,7 +141,7 @@ static int decode_single(GlifReader *gr, uint32_t frame) {
 
 /* Check if a frame type is a delta frame (bit 0 set) */
 static int is_delta(uint8_t type) {
-    return (type & GLIF_FRAME_DELTA) != 0;
+    return (type & 0x01) != 0;
 }
 
 int glif_reader_decode(GlifReader *gr, uint32_t frame) {

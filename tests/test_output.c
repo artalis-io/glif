@@ -755,7 +755,7 @@ UTEST(output, glif_writer_header) {
     fclose(f);
 
     ASSERT_EQ(memcmp(hdr, "GLIF", 4), 0);
-    ASSERT_EQ(hdr[4], GLIF_VERSION_1);
+    ASSERT_EQ(hdr[4], GLIF_VERSION);
     ASSERT_EQ(hdr[5], 0);  /* flags: no dark mode */
     ASSERT_EQ(read_u16(hdr + 6), 120);
     ASSERT_EQ(read_u16(hdr + 8), 40);
