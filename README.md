@@ -169,8 +169,9 @@ ffmpeg -i video.mp4 -f rawvideo -pix_fmt rgb24 -s 854x358 - 2>/dev/null | \
 Open `web/player.html` in a browser to play `.glif` files. Features:
 - Drag-and-drop or click to open `.glif` files
 - Play/pause, seek, and speed controls (0.25x–4x)
+- HDR contrast enhancement toggle (shader-based tone mapping)
 - Fullscreen support
-- Keyboard shortcuts: Space (play/pause), F (fullscreen), arrow keys (seek/speed)
+- Keyboard shortcuts: Space (play/pause), F (fullscreen), H (HDR), arrow keys (seek/speed)
 - Auto-loads `mk421.glif` if present in the same directory
 
 ```bash
@@ -187,7 +188,7 @@ Bundle a `.glif` file into a single HTML file — no server, no external depende
 ./scripts/glif-embed.sh video.glif -o embed.html   # custom output name
 ```
 
-The output HTML inlines the WASM binary, JS player, and `.glif` data as base64. Opens directly in any browser with auto-play.
+The output HTML inlines the WASM binary, JS player, and `.glif` data as base64. Opens directly in any browser with auto-play and HDR toggle.
 
 **Programmatic API (`web/glif-player.js`):**
 
@@ -207,6 +208,7 @@ player.play();
 player.pause();
 player.seek(42);
 player.setSpeed(2.0);  // 0.1x to 10x
+player.setHDR(0.7);    // 0.0 (off) to 1.0 (full effect)
 player.destroy();
 ```
 
