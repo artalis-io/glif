@@ -89,6 +89,10 @@ static inline GLuint vp_create_data_texture(void) {
 /* ── Init ── */
 
 static inline void vp_state_init(VpRenderState *vp) {
+    /* Textures may have non-power-of-two widths (e.g. 213 cols).
+       Default GL_UNPACK_ALIGNMENT=4 causes row padding that shears the image. */
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+
     GLuint vs = vp_compile_shader(GL_VERTEX_SHADER, vp_vert_src);
     GLuint fs = vp_compile_shader(GL_FRAGMENT_SHADER, vp_frag_src);
     vp->program = glCreateProgram();

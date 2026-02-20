@@ -117,10 +117,16 @@ int player_load(const uint8_t *data, int len) {
         return -1;
     }
 
-    /* Rebuild font atlas with the file's cell dimensions */
+    /* Rebuild font atlas at render quality (4x source cell size, matching PPM
+       scale). The atlas_cell_w/h drives both glyph rasterization resolution
+       and the cell aspect ratio in vp_draw — scaling both by the same factor
+       preserves the correct aspect while giving crisp glyphs. */
+    int render_scale = 4;
     vp_build_font_atlas(&player.vp,
                         geist_pixel_square_ttf, (int)geist_pixel_square_ttf_len,
-                        hdr->cell_w, hdr->cell_h, player.dpr);
+                        hdr->cell_w * render_scale,
+                        hdr->cell_h * render_scale,
+                        player.dpr);
 
     player.loaded = 1;
     return 0;
