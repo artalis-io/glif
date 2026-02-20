@@ -158,12 +158,38 @@ Capture video as a compact `.glif` binary file, then play it back in the browser
 ffmpeg -i video.mp4 -f rawvideo -pix_fmt rgb24 -s 640x480 - 2>/dev/null | \
   ./glif --video 640 480 -f fonts/GeistPixel-Square.ttf --output-glif output.glif --compress --fps 30
 
-# Uncompressed v1 capture (larger files, simpler format)
-ffmpeg -i video.mp4 -f rawvideo -pix_fmt rgb24 -s 640x480 - 2>/dev/null | \
-  ./glif --video 640 480 -f fonts/GeistPixel-Square.ttf --output-glif output.glif --fps 30
+# Hi-res capture (4x8 cells, high contrast)
+ffmpeg -i video.mp4 -f rawvideo -pix_fmt rgb24 -s 854x358 - 2>/dev/null | \
+  ./glif --video 854 358 -f fonts/GeistPixel-Square.ttf -w 4 -h 8 -d 2.5 -g 2.5 \
+    --output-glif output.glif --compress --dark --fps 30
 ```
 
-**Browser playback (`web/glif-player.js`):**
+**Web player (`web/player.html`):**
+
+Open `web/player.html` in a browser to play `.glif` files. Features:
+- Drag-and-drop or click to open `.glif` files
+- Play/pause, seek, and speed controls (0.25x–4x)
+- Fullscreen support
+- Keyboard shortcuts: Space (play/pause), F (fullscreen), arrow keys (seek/speed)
+- Auto-loads `mk421.glif` if present in the same directory
+
+```bash
+make wasm-player                           # build WASM player
+cd web && python3 -m http.server 8000      # serve locally
+```
+
+**Self-contained HTML embed:**
+
+Bundle a `.glif` file into a single HTML file — no server, no external dependencies:
+
+```bash
+./scripts/glif-embed.sh video.glif                # → video.html
+./scripts/glif-embed.sh video.glif -o embed.html   # custom output name
+```
+
+The output HTML inlines the WASM binary, JS player, and `.glif` data as base64. Opens directly in any browser with auto-play.
+
+**Programmatic API (`web/glif-player.js`):**
 
 ```javascript
 import { GlifPlayer } from './glif-player.js';
@@ -182,12 +208,6 @@ player.pause();
 player.seek(42);
 player.setSpeed(2.0);  // 0.1x to 10x
 player.destroy();
-```
-
-Build the WASM player module:
-
-```bash
-make wasm-player   # produces web/glif-player-wasm.js + .wasm
 ```
 
 The v2 format uses per-frame compression — each frame is encoded with whichever of raw, RLE, delta, or delta+RLE produces the smallest output. Delta variants use the previous frame as reference; scene changes naturally fall back to raw/RLE keyframes.
@@ -342,12 +362,13 @@ extension/              Chrome extension (Manifest V3)
   test/                 Puppeteer smoke tests
 
 web/                  Web frontend and player
+  player.html           .glif player with drag-and-drop, controls, fullscreen
   glif-player.js        ES module .glif player with playback controls
   glif-player-wasm.js   WASM player module (built by make wasm-player)
 
 vendor/               Vendored single-header libraries (stb, Nuklear, Clay, utest.h)
 tests/                Unit tests (166 tests across 11 test files)
-scripts/              Convenience scripts for transcoding and webcam
+scripts/              Convenience scripts for transcoding, webcam, and embed
 tools/                Benchmark tool
 ```
 

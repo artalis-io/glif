@@ -131,6 +131,34 @@ Web-based player for the `.glif` binary capture format. Standalone WASM module w
 
 **Build:** `make wasm-player` produces `web/glif-player-wasm.js` + `.wasm`.
 
+### .glif Player UI ✅
+
+Full-featured web player (`web/player.html`) for `.glif` files with a dark modern design:
+
+- **File loading** — Drag-and-drop or click to open `.glif` files via file picker
+- **Playback controls** — Play/pause, click-to-seek progress bar, speed selector (0.25x–4x)
+- **Fullscreen** — Fullscreen API with responsive canvas sizing
+- **Keyboard shortcuts** — Space (play/pause), F (fullscreen), left/right arrows (seek ±5s), up/down arrows (speed)
+- **Auto-load** — Fetches `mk421.glif` if present, or accepts `window.__GLIF_EMBED_DATA` for embed mode
+- **Info bar** — File metadata: grid size, cell size, fps, frame count, duration
+- **DPR-aware** — Proper HiDPI/Retina canvas sizing using `devicePixelRatio`
+
+### Self-Contained HTML Embed ✅
+
+Bundle a `.glif` file + WASM player into a single self-contained HTML file that opens directly in any browser — no server, no external dependencies.
+
+```bash
+./scripts/glif-embed.sh video.glif                # → video.html
+./scripts/glif-embed.sh video.glif -o embed.html   # custom output name
+```
+
+**How it works:**
+- Base64-encodes the `.wasm` binary and `.glif` data inline
+- Inlines the Emscripten JS loader and player logic
+- Passes `wasmBinary` to the Emscripten factory to avoid external fetches
+- Auto-plays on load with full player controls (play/pause, seek, speed, fullscreen)
+- Same dark modern UI as `web/player.html`
+
 ### Shared WebGL Font-Atlas Renderer ✅
 
 Extracted the duplicated WebGL shader code from `ext.c` and `ui.c` into a shared header-only module (`src/platform/wasm/vp_render.h`). All functions `static inline` since each WASM target compiles separately.

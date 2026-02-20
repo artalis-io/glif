@@ -2,145 +2,341 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Glif Player</title>
 <style>
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { background: #000; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; font-family: system-ui, sans-serif; color: #ccc; }
-  canvas { background: #000; max-width: 100vw; max-height: 80vh; }
-  .controls { margin-top: 12px; display: flex; gap: 10px; align-items: center; font-size: 14px; }
-  button { background: #222; color: #ccc; border: 1px solid #444; padding: 6px 16px; cursor: pointer; border-radius: 4px; font-size: 14px; }
-  button:hover { background: #333; }
-  input[type=range] { width: 300px; accent-color: #888; }
-  .info { margin-top: 8px; font-size: 12px; color: #666; }
-  .drop-zone { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 24px; color: #444; cursor: pointer; z-index: 10; }
-  .drop-zone:hover { color: #888; }
-  .drop-zone.hidden { display: none; }
+:root {
+  --bg: #0a0a0a;
+  --surface: #141414;
+  --border: #2a2a2a;
+  --text: #e0e0e0;
+  --text-dim: #666;
+  --accent: #4a9eff;
+  --accent-hover: #6ab4ff;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { height: 100%; background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; overflow: hidden; }
+
+.player-wrap {
+  display: flex; flex-direction: column; height: 100vh; width: 100vw;
+}
+.player-wrap.fullscreen { position: fixed; inset: 0; z-index: 9999; }
+
+.canvas-area {
+  flex: 1; display: flex; align-items: center; justify-content: center;
+  position: relative; overflow: hidden; background: #000; cursor: pointer;
+  min-height: 0;
+}
+canvas { display: block; max-width: 100%; max-height: 100%; object-fit: contain; }
+
+.drop-overlay {
+  position: absolute; inset: 0; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 16px;
+  background: rgba(0,0,0,0.85); z-index: 10; cursor: pointer;
+  transition: opacity 0.2s;
+}
+.drop-overlay.hidden { opacity: 0; pointer-events: none; }
+.drop-overlay svg { width: 64px; height: 64px; stroke: var(--text-dim); fill: none; stroke-width: 1.5; }
+.drop-overlay .label { font-size: 18px; color: var(--text-dim); }
+.drop-overlay .sublabel { font-size: 13px; color: #444; }
+.drop-overlay:hover svg { stroke: var(--accent); }
+.drop-overlay:hover .label { color: var(--text); }
+
+.controls {
+  display: flex; align-items: center; gap: 12px;
+  padding: 10px 16px; background: var(--surface);
+  border-top: 1px solid var(--border); flex-shrink: 0;
+  user-select: none;
+}
+
+.btn {
+  background: none; border: none; color: var(--text); cursor: pointer;
+  padding: 6px; border-radius: 6px; display: flex; align-items: center;
+  justify-content: center; transition: background 0.15s;
+}
+.btn:hover { background: rgba(255,255,255,0.08); }
+.btn svg { width: 20px; height: 20px; fill: currentColor; }
+
+.progress-wrap {
+  flex: 1; height: 32px; display: flex; align-items: center; cursor: pointer;
+  position: relative;
+}
+.progress-track {
+  width: 100%; height: 4px; background: var(--border); border-radius: 2px;
+  position: relative; transition: height 0.15s;
+}
+.progress-wrap:hover .progress-track { height: 6px; }
+.progress-fill {
+  height: 100%; background: var(--accent); border-radius: 2px;
+  position: absolute; top: 0; left: 0; pointer-events: none;
+}
+
+.time { font-size: 13px; color: var(--text-dim); font-variant-numeric: tabular-nums; white-space: nowrap; min-width: 90px; }
+
+.speed-select {
+  background: var(--surface); color: var(--text-dim); border: 1px solid var(--border);
+  border-radius: 4px; padding: 4px 6px; font-size: 12px; cursor: pointer;
+  outline: none;
+}
+.speed-select:hover { border-color: #444; color: var(--text); }
+
+.info-bar {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 4px 16px 6px; background: var(--surface); font-size: 11px;
+  color: var(--text-dim); border-top: 1px solid var(--border); flex-shrink: 0;
+}
+.info-bar.hidden { display: none; }
+.info-bar a { color: var(--text-dim); text-decoration: none; }
+.info-bar a:hover { color: var(--accent); }
+
+input[type=file] { display: none; }
 </style>
 </head>
 <body>
-  <div class="drop-zone" id="dropZone">Drop or click to open a .glif file</div>
-  <input type="file" id="filePicker" accept=".glif" style="display:none">
-  <canvas id="glif-player-canvas" width="1280" height="480"></canvas>
-  <div class="controls">
-    <button id="playPause">Play</button>
-    <input type="range" id="scrubber" min="0" max="0" value="0">
-    <span id="frameInfo">0 / 0</span>
-    <select id="speed">
+<div class="player-wrap" id="playerWrap">
+  <div class="canvas-area" id="canvasArea">
+    <div class="drop-overlay" id="dropOverlay">
+      <svg viewBox="0 0 64 64"><path d="M32 8v36M20 32l12 12 12-12"/><rect x="8" y="44" width="48" height="14" rx="3"/></svg>
+      <div class="label">Drop or click to open a .glif file</div>
+      <div class="sublabel">Keyboard: Space = play/pause, F = fullscreen, ←→ = seek</div>
+    </div>
+    <canvas id="glif-player-canvas" width="1280" height="720"></canvas>
+  </div>
+
+  <div class="controls" id="controlBar">
+    <button class="btn" id="playPause" title="Play/Pause (Space)">
+      <svg id="iconPlay" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+      <svg id="iconPause" viewBox="0 0 24 24" style="display:none"><path d="M6 4h4v16H6zm8 0h4v16h-4z"/></svg>
+    </button>
+
+    <span class="time" id="timeDisplay">0:00 / 0:00</span>
+
+    <div class="progress-wrap" id="progressWrap">
+      <div class="progress-track">
+        <div class="progress-fill" id="progressFill" style="width:0%"></div>
+      </div>
+    </div>
+
+    <select class="speed-select" id="speed" title="Playback speed">
       <option value="0.25">0.25x</option>
       <option value="0.5">0.5x</option>
       <option value="1" selected>1x</option>
       <option value="2">2x</option>
       <option value="4">4x</option>
     </select>
+
+    <button class="btn" id="openBtn" title="Open file">
+      <svg viewBox="0 0 24 24"><path d="M19 20H5a2 2 0 01-2-2V6a2 2 0 012-2h5l2 2h7a2 2 0 012 2v10a2 2 0 01-2 2z" fill="none" stroke="currentColor" stroke-width="2"/></svg>
+    </button>
+
+    <button class="btn" id="fullscreenBtn" title="Fullscreen (F)">
+      <svg viewBox="0 0 24 24"><path d="M8 3H5a2 2 0 00-2 2v3m18 0V5a2 2 0 00-2-2h-3m0 18h3a2 2 0 002-2v-3M3 16v3a2 2 0 002 2h3" fill="none" stroke="currentColor" stroke-width="2"/></svg>
+    </button>
   </div>
-  <div class="info" id="info"></div>
 
-  <script type="module">
-    const canvas = document.getElementById('glif-player-canvas');
-    const scrubber = document.getElementById('scrubber');
-    const frameInfo = document.getElementById('frameInfo');
-    const playPause = document.getElementById('playPause');
-    const speedSel = document.getElementById('speed');
-    const infoEl = document.getElementById('info');
-    const dropZone = document.getElementById('dropZone');
-    const filePicker = document.getElementById('filePicker');
+  <div class="info-bar hidden" id="infoBar">
+    <span id="infoText"></span>
+    <a href="https://github.com/artalis-io/glif" target="_blank">glif</a>
+  </div>
+</div>
 
-    let player = null;
-    let mounted = false;
+<input type="file" id="filePicker" accept=".glif">
 
-    async function ensureMount() {
-      if (mounted) return;
-      const { GlifPlayer } = await import('./glif-player.js');
-      player = new GlifPlayer();
-      await player.mount(canvas);
-      mounted = true;
+<script type="module">
+const canvas = document.getElementById('glif-player-canvas');
+const dropOverlay = document.getElementById('dropOverlay');
+const filePicker = document.getElementById('filePicker');
+const playPauseBtn = document.getElementById('playPause');
+const iconPlay = document.getElementById('iconPlay');
+const iconPause = document.getElementById('iconPause');
+const timeDisplay = document.getElementById('timeDisplay');
+const progressWrap = document.getElementById('progressWrap');
+const progressFill = document.getElementById('progressFill');
+const speedSel = document.getElementById('speed');
+const openBtn = document.getElementById('openBtn');
+const fullscreenBtn = document.getElementById('fullscreenBtn');
+const playerWrap = document.getElementById('playerWrap');
+const canvasArea = document.getElementById('canvasArea');
+const infoBar = document.getElementById('infoBar');
+const infoText = document.getElementById('infoText');
 
-      player.onframe = (frame) => {
-        scrubber.value = frame;
-        frameInfo.textContent = `${frame} / ${player.frames}`;
-      };
-      player.onend = () => { playPause.textContent = 'Play'; };
-    }
+let player = null;
+let mounted = false;
 
-    async function loadGlif(buffer, name) {
-      try {
-        await ensureMount();
-        await player.loadFile(buffer);
-        dropZone.classList.add('hidden');
+async function ensureMount() {
+  if (mounted) return;
+  const { GlifPlayer } = await import('./glif-player.js');
+  player = new GlifPlayer();
+  await player.mount(canvas);
+  mounted = true;
+  player.onframe = updateUI;
+  player.onend = () => syncPlayIcon();
+}
 
-        const aspect = player.cols * player.cellW / (player.rows * player.cellH);
-        const maxH = window.innerHeight * 0.8;
-        const maxW = window.innerWidth;
-        let h = maxH;
-        let w = h * aspect;
-        if (w > maxW) { w = maxW; h = w / aspect; }
-        canvas.width = Math.round(w * (window.devicePixelRatio || 1));
-        canvas.height = Math.round(h * (window.devicePixelRatio || 1));
-        canvas.style.width = Math.round(w) + 'px';
-        canvas.style.height = Math.round(h) + 'px';
-        player.resize(canvas.width, canvas.height);
-        player.seek(0);
+function formatTime(seconds) {
+  const m = Math.floor(seconds / 60);
+  const s = Math.floor(seconds % 60);
+  return `${m}:${s.toString().padStart(2, '0')}`;
+}
 
-        scrubber.max = player.frames - 1;
-        scrubber.value = 0;
-        frameInfo.textContent = `0 / ${player.frames}`;
-        infoEl.textContent = `${name} — ${player.cols}x${player.rows} cells, ${player.cellW}x${player.cellH}px, ${player.fps} fps, ${player.frames} frames`;
-      } catch (err) {
-        infoEl.textContent = `Error: ${err.message}`;
-        console.error(err);
-      }
-    }
+function updateUI(frame) {
+  if (!player) return;
+  const cur = frame / player.fps;
+  const total = player.frames / player.fps;
+  timeDisplay.textContent = `${formatTime(cur)} / ${formatTime(total)}`;
+  progressFill.style.width = `${(frame / (player.frames - 1)) * 100}%`;
+}
 
-    async function openFile(file) {
-      if (file) await loadGlif(await file.arrayBuffer(), file.name);
-    }
+function syncPlayIcon() {
+  if (player && player.isPlaying) {
+    iconPlay.style.display = 'none';
+    iconPause.style.display = '';
+  } else {
+    iconPlay.style.display = '';
+    iconPause.style.display = 'none';
+  }
+}
 
-    // Click to open file picker — registered synchronously, works even if WASM fails
-    dropZone.addEventListener('click', () => filePicker.click());
-    canvas.addEventListener('dblclick', () => filePicker.click());
+function sizeCanvas() {
+  if (!player || !player.frames) return;
+  const aspect = player.cols * player.cellW / (player.rows * player.cellH);
+  const rect = canvasArea.getBoundingClientRect();
+  let w = rect.width;
+  let h = rect.height;
+  if (w / h > aspect) { w = h * aspect; } else { h = w / aspect; }
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = Math.round(w * dpr);
+  canvas.height = Math.round(h * dpr);
+  canvas.style.width = Math.round(w) + 'px';
+  canvas.style.height = Math.round(h) + 'px';
+  player.resize(canvas.width, canvas.height);
+}
 
-    filePicker.addEventListener('change', async () => {
-      const file = filePicker.files[0];
-      if (file) await openFile(file);
-      filePicker.value = '';
-    });
+async function loadGlif(buffer, name) {
+  try {
+    await ensureMount();
+    await player.loadFile(buffer);
+    dropOverlay.classList.add('hidden');
+    infoBar.classList.remove('hidden');
 
-    // Drag and drop on body
-    document.body.addEventListener('dragover', (e) => e.preventDefault());
-    document.body.addEventListener('dragenter', (e) => e.preventDefault());
-    document.body.addEventListener('drop', async (e) => {
+    sizeCanvas();
+    player.seek(0);
+    updateUI(0);
+
+    const dur = formatTime(player.frames / player.fps);
+    infoText.textContent = `${name} — ${player.cols}×${player.rows} · ${player.cellW}×${player.cellH}px · ${player.fps} fps · ${player.frames} frames · ${dur}`;
+  } catch (err) {
+    infoText.textContent = `Error: ${err.message}`;
+    infoBar.classList.remove('hidden');
+    console.error(err);
+  }
+}
+
+async function openFile(file) {
+  if (file) await loadGlif(await file.arrayBuffer(), file.name);
+}
+
+// Play / Pause
+function togglePlay() {
+  if (!player || !player.frames) return;
+  if (player.isPlaying) player.pause(); else player.play();
+  syncPlayIcon();
+}
+
+playPauseBtn.addEventListener('click', togglePlay);
+canvasArea.addEventListener('click', (e) => {
+  if (e.target === canvas || e.target === canvasArea) togglePlay();
+});
+
+// Progress bar seek
+progressWrap.addEventListener('click', (e) => {
+  if (!player || !player.frames) return;
+  const rect = progressWrap.getBoundingClientRect();
+  const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+  player.seek(Math.round(pct * (player.frames - 1)));
+  updateUI(player.currentFrame);
+});
+
+// Speed
+speedSel.addEventListener('change', () => {
+  if (player) player.setSpeed(parseFloat(speedSel.value));
+});
+
+// File open
+dropOverlay.addEventListener('click', () => filePicker.click());
+openBtn.addEventListener('click', () => filePicker.click());
+filePicker.addEventListener('change', async () => {
+  if (filePicker.files[0]) await openFile(filePicker.files[0]);
+  filePicker.value = '';
+});
+
+// Drag and drop
+document.body.addEventListener('dragover', (e) => e.preventDefault());
+document.body.addEventListener('dragenter', (e) => e.preventDefault());
+document.body.addEventListener('drop', async (e) => {
+  e.preventDefault();
+  const file = e.dataTransfer.files[0];
+  if (file) await openFile(file);
+});
+dropOverlay.addEventListener('dragover', (e) => e.preventDefault());
+dropOverlay.addEventListener('drop', async (e) => {
+  e.preventDefault();
+  const file = e.dataTransfer.files[0];
+  if (file) await openFile(file);
+});
+
+// Fullscreen
+function toggleFullscreen() {
+  if (document.fullscreenElement) {
+    document.exitFullscreen();
+  } else {
+    playerWrap.requestFullscreen().catch(() => {});
+  }
+}
+fullscreenBtn.addEventListener('click', toggleFullscreen);
+document.addEventListener('fullscreenchange', () => sizeCanvas());
+
+// Keyboard
+document.addEventListener('keydown', (e) => {
+  if (e.target.tagName === 'SELECT') return;
+  switch (e.key) {
+    case ' ':
       e.preventDefault();
-      const file = e.dataTransfer.files[0];
-      if (file) await openFile(file);
-    });
-
-    // Also on dropZone explicitly
-    dropZone.addEventListener('dragover', (e) => e.preventDefault());
-    dropZone.addEventListener('drop', async (e) => {
+      togglePlay();
+      break;
+    case 'f': case 'F':
+      toggleFullscreen();
+      break;
+    case 'ArrowLeft':
+      if (player) { player.seek(Math.max(0, player.currentFrame - Math.round(player.fps * 5))); updateUI(player.currentFrame); }
+      break;
+    case 'ArrowRight':
+      if (player) { player.seek(Math.min(player.frames - 1, player.currentFrame + Math.round(player.fps * 5))); updateUI(player.currentFrame); }
+      break;
+    case 'ArrowUp':
       e.preventDefault();
-      const file = e.dataTransfer.files[0];
-      if (file) await openFile(file);
-    });
+      if (player) { const s = Math.min(10, parseFloat(speedSel.value) * 2); speedSel.value = s; player.setSpeed(s); }
+      break;
+    case 'ArrowDown':
+      e.preventDefault();
+      if (player) { const s = Math.max(0.25, parseFloat(speedSel.value) / 2); speedSel.value = s; player.setSpeed(s); }
+      break;
+  }
+});
 
-    playPause.addEventListener('click', () => {
-      if (!player) return;
-      if (player.isPlaying) { player.pause(); playPause.textContent = 'Play'; }
-      else { player.play(); playPause.textContent = 'Pause'; }
-    });
+// Window resize
+window.addEventListener('resize', () => sizeCanvas());
 
-    scrubber.addEventListener('input', () => {
-      if (player) player.seek(parseInt(scrubber.value));
-    });
-
-    speedSel.addEventListener('change', () => {
-      if (player) player.setSpeed(parseFloat(speedSel.value));
-    });
-
-    // Auto-load mk421.glif if served alongside
-    try {
-      const res = await fetch('mk421.glif');
-      if (res.ok) await loadGlif(await res.arrayBuffer(), 'mk421.glif');
-    } catch (_) {}
-  </script>
+// Auto-load: check for inline data (embed mode) or fetch mk421.glif
+if (window.__GLIF_EMBED_DATA) {
+  const bin = Uint8Array.from(atob(window.__GLIF_EMBED_DATA), c => c.charCodeAt(0));
+  loadGlif(bin.buffer, window.__GLIF_EMBED_NAME || 'embedded.glif');
+} else {
+  try {
+    const res = await fetch('mk421.glif');
+    if (res.ok) await loadGlif(await res.arrayBuffer(), 'mk421.glif');
+  } catch (_) {}
+}
+</script>
 </body>
 </html>
