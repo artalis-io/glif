@@ -89,6 +89,58 @@ Override `navigator.mediaDevices.getUserMedia` to process webcam frames through 
 
 Puppeteer-based smoke tests (`npm run test:ext`) that load the extension in a real Chrome instance with a synthetic video (canvas `captureStream`). Verifies: script injection, overlay creation/removal, WebGL context, params, hi-res, disable/re-enable, SPA `pushState` navigation, and `replaceState` no-op.
 
+### .glif v2 Compression ✅
+
+RLE + delta frame compression for the `.glif` binary format. Enabled with `--compress` flag (requires `--output-glif`). Header version bumps to 2 with `GLIF_FLAG_COMPRESSED` (0x02). Without `--compress`, output is identical to v1.
+
+**Per-frame envelope** (5 bytes): `[frame_type(u8), payload_size(u32 LE)]`
+
+Frame types (composable bit flags):
+| Type | Encoding |
+|------|----------|
+| `0x00` | Raw — identical to v1 frame layout |
+| `0x01` | Delta — `[num_changes(u32), per change: index(u16), ch, r, g, b]` |
+| `0x02` | RLE — `[count(u8, 1-255), ch, r, g, b]` runs |
+| `0x03` | Delta+RLE — XOR with previous frame, then RLE |
+
+The encoder tries all applicable methods per frame and picks the smallest. Delta variants are skipped for the first frame (no previous reference). On scene changes, delta costs spike and raw/RLE naturally wins — those frames implicitly serve as keyframes. Bit 2 (0x04) is reserved for future deflate.
+
+### .glif Decoder (GlifReader) ✅
+
+Memory-buffer-based decoder for the `.glif` binary format. Reads v1 (raw) and v2 (compressed) files without `FILE*` — WASM-compatible. Depends only on `compress.c`.
+
+- **Sequential fast-path** — When decoding frame N after frame N-1, no walk-back needed; delta frames decode directly against the previous frame buffer
+- **Random access** — For arbitrary seeks, finds the nearest preceding non-delta keyframe and decodes forward through the target frame
+- **Frame index** — Built on `glif_reader_open`: v1 uses fixed offsets, v2 walks 5-byte envelopes sequentially
+- **Round-trip verified** — Unit tests write with `GlifWriter`, read with `GlifReader`, and verify byte-exact match for all frame types (raw, RLE, delta, delta+RLE)
+
+### .glif Player (WASM) ✅
+
+Web-based player for the `.glif` binary capture format. Standalone WASM module with minimal deps (no pipeline code — just `glif.c`, `compress.c`, and `player.c`).
+
+**C side (`src/platform/wasm/player.c`):**
+- `player_init` — WebGL context + font atlas setup
+- `player_load` — parse `.glif` buffer via `GlifReader`, rebuild atlas with file's cell dimensions
+- `player_decode_frame` / `player_render` — decode and render via shared WebGL renderer
+- Header accessors: frames, fps, cols, rows, cell_w, cell_h, flags
+
+**JS side (`web/glif-player.js`):**
+- ES module `GlifPlayer` class with `mount()`, `loadFile()`, `play()`, `pause()`, `seek()`, `setSpeed()`, `destroy()`
+- `requestAnimationFrame`-based playback with accumulator-driven frame stepping
+- Configurable speed (0.1x–10x), looping, and callbacks (`onload`, `onframe`, `onend`)
+
+**Build:** `make wasm-player` produces `web/glif-player-wasm.js` + `.wasm`.
+
+### Shared WebGL Font-Atlas Renderer ✅
+
+Extracted the duplicated WebGL shader code from `ext.c` and `ui.c` into a shared header-only module (`src/platform/wasm/vp_render.h`). All functions `static inline` since each WASM target compiles separately.
+
+- `VpRenderState` struct holds all GL state (program, textures, quad buffer, atlas dimensions)
+- `vp_state_init` — create shader program + quad + data textures
+- `vp_build_font_atlas` — rasterize 95-char atlas (16x6 grid) from TTF font data
+- `vp_render_raw` — upload char/color buffers and draw (used by player)
+- `vp_upload` / `vp_draw` — split upload/draw for callers needing custom viewport/scissor (used by ui.c with Clay bounds)
+
 ---
 
 ## Planned
@@ -117,28 +169,6 @@ Download button in the web UI to save the current render as PNG or SVG.
 - PNG: read WebGL framebuffer pixels via `gl.readPixels()`, encode with canvas `toBlob()`
 - SVG: generate from the grid data (same as CLI SVG output)
 - Trigger browser download via `URL.createObjectURL()`
-
-### .glif Player
-
-Web-based player for the `.glif` binary capture format.
-
-**Approach:**
-- JS decoder parses the 24-byte header, streams frames
-- Reuse existing WebGL font-atlas shader for rendering
-- Playback controls: play/pause, seek, speed, loop
-- Could also embed in the existing web UI as a drag-and-drop handler for `.glif` files
-
-### .glif Delta Compression
-
-Flag byte + only changed cells to shrink file sizes for typical video content.
-
-**Approach:**
-- Frame type byte: `0x00` = keyframe (all cells), `0x01` = delta
-- Delta frame: count of changed cells (uint16), followed by [index(uint16), ch, r, g, b] per changed cell
-- Periodic keyframes (every N frames) for seeking
-- Backwards compatible: version bump to 2, v1 readers skip unknown frame types
-
-**Expected compression:** 60-80% reduction for typical video (most cells unchanged between frames).
 
 ### 256-Color and 16-Color ANSI Fallback
 

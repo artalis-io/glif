@@ -31,7 +31,7 @@ The pipeline:
 ```bash
 make          # build glif CLI
 make wasm     # build WebAssembly (requires Emscripten)
-make test     # run unit tests (136 tests)
+make test     # run unit tests (166 tests)
 make debug    # build with AddressSanitizer + UBSan
 ```
 
@@ -89,6 +89,7 @@ A monospace TTF font is required via `-f`. The font's glyph shapes directly affe
 | `--adapt-floor <0-255>` | Adaptive contrast noise floor | off |
 | `--adapt-ceil <0-255>` | Adaptive contrast ceiling | 80 |
 | `--output-glif <path>` | Video: write .glif binary file | — |
+| `--compress` | Enable v2 compression for .glif output | off |
 
 ## Video in terminal
 
@@ -145,6 +146,51 @@ ffmpeg -i input.mp4 -f rawvideo -pix_fmt rgb24 -s 640x480 - 2>/dev/null | \
   ffmpeg -f rawvideo -pix_fmt rgb24 -video_size 2560x1920 -framerate 30 -i - \
     -c:v libx264 -pix_fmt yuv420p output.mp4
 ```
+
+## .glif capture and playback
+
+Capture video as a compact `.glif` binary file, then play it back in the browser with the WASM player.
+
+**Capture:**
+
+```bash
+# Capture video to .glif with v2 compression (RLE + delta)
+ffmpeg -i video.mp4 -f rawvideo -pix_fmt rgb24 -s 640x480 - 2>/dev/null | \
+  ./glif --video 640 480 -f fonts/GeistPixel-Square.ttf --output-glif output.glif --compress --fps 30
+
+# Uncompressed v1 capture (larger files, simpler format)
+ffmpeg -i video.mp4 -f rawvideo -pix_fmt rgb24 -s 640x480 - 2>/dev/null | \
+  ./glif --video 640 480 -f fonts/GeistPixel-Square.ttf --output-glif output.glif --fps 30
+```
+
+**Browser playback (`web/glif-player.js`):**
+
+```javascript
+import { GlifPlayer } from './glif-player.js';
+
+const player = new GlifPlayer();
+await player.mount(document.getElementById('canvas'));
+
+const response = await fetch('output.glif');
+await player.loadFile(await response.arrayBuffer());
+
+player.onframe = (frame) => console.log(`Frame ${frame}/${player.frames}`);
+player.play();
+
+// Controls
+player.pause();
+player.seek(42);
+player.setSpeed(2.0);  // 0.1x to 10x
+player.destroy();
+```
+
+Build the WASM player module:
+
+```bash
+make wasm-player   # produces web/glif-player-wasm.js + .wasm
+```
+
+The v2 format uses per-frame compression — each frame is encoded with whichever of raw, RLE, delta, or delta+RLE produces the smallest output. Delta variants use the previous frame as reference; scene changes naturally fall back to raw/RLE keyframes.
 
 ## Virtual webcam
 
@@ -263,14 +309,18 @@ src/
   font.c/h          Font rasterization and character shape database
   contrast.c/h      Directional + global + adaptive contrast enhancement
   match.c/h         Nearest-neighbor character matching with LRU cache
-  output.c/h        Plain, ANSI, PPM, raw pipe, .glif binary output
+  output.c/h        Plain, ANSI, PPM, raw pipe, .glif binary writer
+  compress.c/h      RLE, delta, and delta+RLE compression codecs
+  glif.c/h          .glif binary decoder (GlifReader) — v1 and v2
   temporal.c/h      Temporal smoothing (normalization, shape, contrast, hysteresis)
   vec6.h            Header-only 6D/10D vector math
   main.c            CLI entry point
 
   platform/wasm/
+    vp_render.h      Shared WebGL font-atlas renderer (header-only)
     ui.c             WASM app: init, frame loop, rendering pipeline
     ext.c            Chrome extension WASM entry point (no UI, frame-driven)
+    player.c         .glif player WASM entry point (decode + WebGL render)
     ui_layout.c/h    Responsive layout (desktop/tablet/mobile breakpoints)
     nk_webgl.c/h     Nuklear WebGL rendering backend
     nk_impl.c        Nuklear implementation defines
@@ -291,8 +341,12 @@ extension/              Chrome extension (Manifest V3)
   wasm/                 WASM build output (glif-ext.js + .wasm)
   test/                 Puppeteer smoke tests
 
+web/                  Web frontend and player
+  glif-player.js        ES module .glif player with playback controls
+  glif-player-wasm.js   WASM player module (built by make wasm-player)
+
 vendor/               Vendored single-header libraries (stb, Nuklear, Clay, utest.h)
-tests/                Unit tests (136 tests across 9 test files)
+tests/                Unit tests (166 tests across 11 test files)
 scripts/              Convenience scripts for transcoding and webcam
 tools/                Benchmark tool
 ```
@@ -317,7 +371,7 @@ Input image/frame
        |
   Nearest-neighbor match in 6D space -> character
        |
-  Output: ASCII | ANSI | PPM | raw | .glif | WebGL
+  Output: ASCII | ANSI | PPM | raw | .glif (v1/v2) | WebGL
 ```
 
 ## Performance
@@ -343,11 +397,11 @@ make tools/bench
 ## Testing
 
 ```bash
-make test         # 136 C unit tests across 9 modules
+make test         # 166 C unit tests across 11 modules
 npm run test:ext  # Chrome extension smoke tests (requires npm install)
 ```
 
-C tests cover all pipeline stages: vector math, sampling, image loading, grid computation, contrast enhancement, character matching, output formats, and temporal smoothing. Uses [Sheredom's utest.h](https://github.com/sheredom/utest.h) framework.
+C tests cover all pipeline stages: vector math, sampling, image loading, grid computation, contrast enhancement, character matching, output formats, temporal smoothing, compression codecs, and .glif round-trip encoding/decoding. Uses [Sheredom's utest.h](https://github.com/sheredom/utest.h) framework.
 
 Extension tests use Puppeteer to launch Chrome with the extension loaded, navigate to a test page with a synthetic video, and verify the full overlay lifecycle: injection, overlay creation, WebGL context, params/hi-res updates, disable/re-enable, SPA navigation (`pushState`), and `replaceState` no-op.
 
