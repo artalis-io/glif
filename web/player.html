@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Glif Player</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #000; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; font-family: system-ui, sans-serif; color: #ccc; }
+  canvas { background: #000; max-width: 100vw; max-height: 80vh; }
+  .controls { margin-top: 12px; display: flex; gap: 10px; align-items: center; font-size: 14px; }
+  button { background: #222; color: #ccc; border: 1px solid #444; padding: 6px 16px; cursor: pointer; border-radius: 4px; font-size: 14px; }
+  button:hover { background: #333; }
+  input[type=range] { width: 300px; accent-color: #888; }
+  .info { margin-top: 8px; font-size: 12px; color: #666; }
+  .drop-zone { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 24px; color: #444; cursor: pointer; z-index: 10; }
+  .drop-zone:hover { color: #888; }
+  .drop-zone.hidden { display: none; }
+</style>
+</head>
+<body>
+  <div class="drop-zone" id="dropZone">Drop or click to open a .glif file</div>
+  <input type="file" id="filePicker" accept=".glif" style="display:none">
+  <canvas id="glif-player-canvas" width="1280" height="480"></canvas>
+  <div class="controls">
+    <button id="playPause">Play</button>
+    <input type="range" id="scrubber" min="0" max="0" value="0">
+    <span id="frameInfo">0 / 0</span>
+    <select id="speed">
+      <option value="0.25">0.25x</option>
+      <option value="0.5">0.5x</option>
+      <option value="1" selected>1x</option>
+      <option value="2">2x</option>
+      <option value="4">4x</option>
+    </select>
+  </div>
+  <div class="info" id="info"></div>
+
+  <script type="module">
+    const canvas = document.getElementById('glif-player-canvas');
+    const scrubber = document.getElementById('scrubber');
+    const frameInfo = document.getElementById('frameInfo');
+    const playPause = document.getElementById('playPause');
+    const speedSel = document.getElementById('speed');
+    const infoEl = document.getElementById('info');
+    const dropZone = document.getElementById('dropZone');
+    const filePicker = document.getElementById('filePicker');
+
+    let player = null;
+    let mounted = false;
+
+    async function ensureMount() {
+      if (mounted) return;
+      const { GlifPlayer } = await import('./glif-player.js');
+      player = new GlifPlayer();
+      await player.mount(canvas);
+      mounted = true;
+
+      player.onframe = (frame) => {
+        scrubber.value = frame;
+        frameInfo.textContent = `${frame} / ${player.frames}`;
+      };
+      player.onend = () => { playPause.textContent = 'Play'; };
+    }
+
+    async function loadGlif(buffer, name) {
+      try {
+        await ensureMount();
+        await player.loadFile(buffer);
+        dropZone.classList.add('hidden');
+
+        const aspect = player.cols * player.cellW / (player.rows * player.cellH);
+        const maxH = window.innerHeight * 0.8;
+        const maxW = window.innerWidth;
+        let h = maxH;
+        let w = h * aspect;
+        if (w > maxW) { w = maxW; h = w / aspect; }
+        canvas.width = Math.round(w * (window.devicePixelRatio || 1));
+        canvas.height = Math.round(h * (window.devicePixelRatio || 1));
+        canvas.style.width = Math.round(w) + 'px';
+        canvas.style.height = Math.round(h) + 'px';
+        player.resize(canvas.width, canvas.height);
+        player.seek(0);
+
+        scrubber.max = player.frames - 1;
+        scrubber.value = 0;
+        frameInfo.textContent = `0 / ${player.frames}`;
+        infoEl.textContent = `${name} — ${player.cols}x${player.rows} cells, ${player.cellW}x${player.cellH}px, ${player.fps} fps, ${player.frames} frames`;
+      } catch (err) {
+        infoEl.textContent = `Error: ${err.message}`;
+        console.error(err);
+      }
+    }
+
+    async function openFile(file) {
+      if (file) await loadGlif(await file.arrayBuffer(), file.name);
+    }
+
+    // Click to open file picker — registered synchronously, works even if WASM fails
+    dropZone.addEventListener('click', () => filePicker.click());
+    canvas.addEventListener('dblclick', () => filePicker.click());
+
+    filePicker.addEventListener('change', async () => {
+      const file = filePicker.files[0];
+      if (file) await openFile(file);
+      filePicker.value = '';
+    });
+
+    // Drag and drop on body
+    document.body.addEventListener('dragover', (e) => e.preventDefault());
+    document.body.addEventListener('dragenter', (e) => e.preventDefault());
+    document.body.addEventListener('drop', async (e) => {
+      e.preventDefault();
+      const file = e.dataTransfer.files[0];
+      if (file) await openFile(file);
+    });
+
+    // Also on dropZone explicitly
+    dropZone.addEventListener('dragover', (e) => e.preventDefault());
+    dropZone.addEventListener('drop', async (e) => {
+      e.preventDefault();
+      const file = e.dataTransfer.files[0];
+      if (file) await openFile(file);
+    });
+
+    playPause.addEventListener('click', () => {
+      if (!player) return;
+      if (player.isPlaying) { player.pause(); playPause.textContent = 'Play'; }
+      else { player.play(); playPause.textContent = 'Pause'; }
+    });
+
+    scrubber.addEventListener('input', () => {
+      if (player) player.seek(parseInt(scrubber.value));
+    });
+
+    speedSel.addEventListener('change', () => {
+      if (player) player.setSpeed(parseFloat(speedSel.value));
+    });
+
+    // Auto-load mk421.glif if served alongside
+    try {
+      const res = await fetch('mk421.glif');
+      if (res.ok) await loadGlif(await res.arrayBuffer(), 'mk421.glif');
+    } catch (_) {}
+  </script>
+</body>
+</html>

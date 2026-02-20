@@ -56,9 +56,17 @@ export class GlifPlayer {
             canvasElement.id = 'glif-player-canvas';
         }
 
-        // Load WASM module
-        const createModule = (await import('./glif-player-wasm.js')).default;
-        this._module = await createModule();
+        // Load WASM module — Emscripten UMD output needs a classic script tag
+        if (typeof createGlifPlayer === 'undefined') {
+            await new Promise((resolve, reject) => {
+                const s = document.createElement('script');
+                s.src = new URL('./glif-player-wasm.js', import.meta.url).href;
+                s.onload = resolve;
+                s.onerror = reject;
+                document.head.appendChild(s);
+            });
+        }
+        this._module = await createGlifPlayer();
 
         const dpr = window.devicePixelRatio || 1;
         const w = canvasElement.width;
