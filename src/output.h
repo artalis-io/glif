@@ -56,22 +56,27 @@ void glif_ppm_pipe_free(GlifPpmPipe *pp);
 #define GLIF_MAGIC "GLIF"
 #define GLIF_VERSION_1       1
 #define GLIF_VERSION_2       2
+#define GLIF_VERSION_3       3
 #define GLIF_HEADER_SIZE 24
 #define GLIF_FLAG_DARK       0x01
 #define GLIF_FLAG_COMPRESSED 0x02
+#define GLIF_FLAG_BLOCKS     0x04
 
 typedef struct {
     FILE *file;
     uint32_t frames;
     int cells;        /* cols × rows */
+    int cols, rows;   /* grid dimensions (for block delta) */
     int err;          /* sticky write-error flag */
-    /* v2 compression (all NULL when v1) */
+    /* v2/v3 compression (all NULL when v1) */
     int compressed;
     uint8_t *prev;      /* previous decoded frame, cells*4 */
     uint8_t *cur;       /* flattened current frame, cells*4 */
     uint8_t *work;      /* XOR scratch buffer, cells*4 */
     uint8_t *enc_buf;   /* encoding output, worst-case sized */
     size_t enc_cap;
+    uint8_t *enc_buf2;  /* second encoding buffer for trying v3 codecs */
+    size_t enc_cap2;
 } GlifWriter;
 
 int  glif_writer_init(GlifWriter *gw, const char *path,

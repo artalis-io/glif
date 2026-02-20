@@ -11,6 +11,7 @@ typedef struct {
     uint16_t cols, rows, cell_w, cell_h;
     float fps;
     uint32_t frames;
+    uint8_t block_w, block_h;   /* v3: macroblock dimensions (0 = not used) */
 } GlifHeader;
 
 /* Per-frame index entry */

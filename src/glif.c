@@ -37,6 +37,13 @@ int glif_reader_open(GlifReader *gr, const uint8_t *data, size_t len) {
     gr->header.cell_h  = rd_u16(data + 12);
     gr->header.fps     = rd_f32(data + 14);
     gr->header.frames  = rd_u32(data + 18);
+    gr->header.block_w = data[22];
+    gr->header.block_h = data[23];
+    /* Default block size for v3 if not specified */
+    if (gr->header.version >= 3 && gr->header.block_w == 0)
+        gr->header.block_w = GLIF_BLOCK_SIZE;
+    if (gr->header.version >= 3 && gr->header.block_h == 0)
+        gr->header.block_h = GLIF_BLOCK_SIZE;
 
     gr->cells = (int)gr->header.cols * (int)gr->header.rows;
 
@@ -66,7 +73,7 @@ int glif_reader_open(GlifReader *gr, const uint8_t *data, size_t len) {
             pos += frame_size;
         }
     } else {
-        /* v2: walk 5-byte envelopes */
+        /* v2/v3: walk 5-byte envelopes */
         for (uint32_t i = 0; i < gr->header.frames; i++) {
             if (pos + 5 > len) {
                 free(gr->index);
@@ -121,6 +128,20 @@ static int decode_single(GlifReader *gr, uint32_t frame) {
     case GLIF_FRAME_DELTA_RLE:
         return glif_compress_delta_rle_decode(payload, plen, gr->prev,
                                               gr->work, gr->decoded, cells);
+    case GLIF_FRAME_DEFLATE:
+        return glif_compress_deflate_decode(payload, plen, gr->decoded, cells);
+    case GLIF_FRAME_PLANAR_RLE:
+        return glif_compress_planar_rle_decode(payload, plen, gr->decoded, cells);
+    case GLIF_FRAME_PLANAR_DELTA_RLE:
+        return glif_compress_planar_delta_rle_decode(payload, plen, gr->prev,
+                                                      gr->decoded, cells);
+    case GLIF_FRAME_BLOCK_DELTA:
+        return glif_compress_block_delta_decode(payload, plen, gr->prev,
+                                                gr->decoded,
+                                                gr->header.cols, gr->header.rows);
+    case GLIF_FRAME_DELTA_DEFLATE:
+        return glif_compress_delta_deflate_decode(payload, plen, gr->prev,
+                                                   gr->work, gr->decoded, cells);
     default:
         return -1;
     }
