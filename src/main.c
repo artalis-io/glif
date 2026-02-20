@@ -38,6 +38,8 @@ typedef struct {
     const char *glif_path; /* video: write .glif binary file */
     const char *v4l2_device; /* video: write to v4l2loopback device (Linux) */
     int compress;  /* video: enable v2 compressed .glif output */
+    int quant_bits;    /* RGB bits to keep (4-8, 8=off) */
+    int threshold;     /* temporal snap threshold (0=off) */
     GlifAdaptiveContrast adaptive; /* adaptive contrast params */
 } Config;
 
@@ -67,6 +69,8 @@ static void usage(const char *prog) {
         "  --v4l2 <device>          Video: write to v4l2loopback device (Linux only)\n"
         "  --output-glif <path>     Video: write .glif binary capture file\n"
         "  --compress               Enable v2 RLE+delta compression for .glif output\n"
+        "  --quant <bits>           RGB bits to keep (4-8, default 6 with --compress, 8=off)\n"
+        "  --threshold <n>          Temporal snap threshold (0-255, default 4 with --compress)\n"
         "  --help                   Show this message\n",
         prog, prog);
 }
@@ -92,6 +96,8 @@ static int parse_args(Config *cfg, int argc, char **argv) {
     cfg->glif_path = NULL;
     cfg->v4l2_device = NULL;
     cfg->compress = 0;
+    cfg->quant_bits = -1;
+    cfg->threshold = -1;
     cfg->adaptive.floor = -1.0f;  /* disabled by default */
     cfg->adaptive.ceil = 80.0f / 255.0f;
 
@@ -189,6 +195,22 @@ static int parse_args(Config *cfg, int argc, char **argv) {
             cfg->glif_path = argv[i];
         } else if (strcmp(argv[i], "--compress") == 0) {
             cfg->compress = 1;
+        } else if (strcmp(argv[i], "--quant") == 0) {
+            if (++i >= argc) { fprintf(stderr, "error: --quant requires argument\n"); return -1; }
+            char *end;
+            long val = strtol(argv[i], &end, 10);
+            if (end == argv[i] || *end != '\0' || val < 4 || val > 8) {
+                fprintf(stderr, "error: invalid quant '%s' (must be 4-8)\n", argv[i]); return -1;
+            }
+            cfg->quant_bits = (int)val;
+        } else if (strcmp(argv[i], "--threshold") == 0) {
+            if (++i >= argc) { fprintf(stderr, "error: --threshold requires argument\n"); return -1; }
+            char *end;
+            long val = strtol(argv[i], &end, 10);
+            if (end == argv[i] || *end != '\0' || val < 0 || val > 255) {
+                fprintf(stderr, "error: invalid threshold '%s' (must be 0-255)\n", argv[i]); return -1;
+            }
+            cfg->threshold = (int)val;
         } else if (strcmp(argv[i], "-a") == 0 || strcmp(argv[i], "--auto-fit") == 0) {
             cfg->auto_fit = 1;
         } else if (strcmp(argv[i], "-c") == 0 || strcmp(argv[i], "--color") == 0) {
@@ -241,6 +263,22 @@ static int parse_args(Config *cfg, int argc, char **argv) {
 #endif
     if (cfg->compress && !cfg->glif_path) {
         fprintf(stderr, "error: --compress requires --output-glif\n");
+        return -1;
+    }
+    /* Apply lossy preprocessing defaults when --compress is active */
+    if (cfg->compress) {
+        if (cfg->quant_bits < 0) cfg->quant_bits = 6;
+        if (cfg->threshold < 0) cfg->threshold = 4;
+    } else {
+        if (cfg->quant_bits < 0) cfg->quant_bits = 8;
+        if (cfg->threshold < 0) cfg->threshold = 0;
+    }
+    if (cfg->quant_bits < 8 && !cfg->compress) {
+        fprintf(stderr, "error: --quant requires --compress\n");
+        return -1;
+    }
+    if (cfg->threshold > 0 && !cfg->compress) {
+        fprintf(stderr, "error: --threshold requires --compress\n");
         return -1;
     }
     return 0;
@@ -454,6 +492,10 @@ static int run_video(Config *cfg) {
             glif_sampling_precompute_free(&pm);
             return 1;
         }
+        if (cfg->quant_bits < 8)
+            glif_writer_set_quant(&gw, 8 - cfg->quant_bits);
+        if (cfg->threshold > 0)
+            glif_writer_set_threshold(&gw, cfg->threshold);
     }
     int needs_ppm_pipe = cfg->pipe_ppm || cfg->pipe_raw || cfg->v4l2_device;
     if (needs_ppm_pipe) {

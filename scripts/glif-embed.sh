@@ -3,9 +3,8 @@
 #
 # Usage: ./scripts/glif-embed.sh input.glif [-o output.html]
 #
-# The .glif data is gzip-compressed before base64 encoding, then decompressed
-# in the browser via DecompressionStream. The WASM binary and JS loader are
-# also inlined. No server required — just open the HTML in a browser.
+# The .glif data is base64-encoded and inlined. The WASM binary and JS loader
+# are also inlined. No server required — just open the HTML in a browser.
 
 set -euo pipefail
 
@@ -16,14 +15,13 @@ WEB_DIR="$PROJECT_DIR/web"
 WASM_JS="$WEB_DIR/glif-player-wasm.js"
 WASM_BIN="$WEB_DIR/glif-player-wasm.wasm"
 
-# Max recommended .glif size for embedding (50MB raw → ~45MB gzip → ~60MB b64)
+# Max recommended .glif size for embedding (50MB → ~67MB b64)
 MAX_GLIF_SIZE=$((50 * 1048576))
 
 usage() {
     echo "Usage: $0 <input.glif> [-o output.html] [--force]"
     echo ""
     echo "Bundles a .glif file into a self-contained HTML video player."
-    echo "The .glif data is gzip-compressed to reduce file size."
     echo ""
     echo "Options:"
     echo "  -o <path>   Output HTML file (default: <input>.html)"
@@ -82,18 +80,9 @@ fi
 echo "Embedding: $NAME ($GLIF_SIZE bytes)"
 echo "WASM binary: $WASM_SIZE bytes"
 
-# Gzip compress the .glif data
-echo "Compressing .glif data..."
-GLIF_GZ=$(mktemp)
-trap 'rm -f "$GLIF_GZ"' EXIT
-gzip -9c "$INPUT" > "$GLIF_GZ"
-GZ_SIZE=$(wc -c < "$GLIF_GZ" | tr -d ' ')
-RATIO=$(echo "$GLIF_SIZE $GZ_SIZE" | awk '{printf "%.1f", (1 - $2/$1) * 100}')
-echo "  Compressed: $GZ_SIZE bytes (${RATIO}% reduction)"
-
-# Base64 encode
-echo "Encoding compressed .glif data..."
-GLIF_B64=$(base64 < "$GLIF_GZ" | tr -d '\n')
+# Base64 encode .glif data directly (already deflate-compressed internally)
+echo "Encoding .glif data..."
+GLIF_B64=$(base64 < "$INPUT" | tr -d '\n')
 echo "Encoding WASM binary..."
 WASM_B64=$(base64 < "$WASM_BIN" | tr -d '\n')
 
@@ -203,7 +192,7 @@ canvas { display: block; max-width: 100%; max-height: 100%; object-fit: contain;
   <div class="canvas-area" id="canvasArea">
     <div class="loading-overlay" id="loadingOverlay">
       <div class="spinner"></div>
-      <div class="label" id="loadingLabel">Decompressing...</div>
+      <div class="label" id="loadingLabel">Loading...</div>
     </div>
     <canvas id="glif-player-canvas" width="1280" height="720"></canvas>
   </div>
@@ -263,8 +252,8 @@ cat >> "$OUTPUT" << 'EMBED_EOF'
 </script>
 EMBED_EOF
 
-# Write the gzip'd glif data inside a non-JS script tag to avoid JS parser overhead
-echo '<script type="application/octet-stream" id="glifGzData">' >> "$OUTPUT"
+# Write the .glif data inside a non-JS script tag to avoid JS parser overhead
+echo '<script type="application/octet-stream" id="glifData">' >> "$OUTPUT"
 echo "$GLIF_B64" >> "$OUTPUT"
 echo '</script>' >> "$OUTPUT"
 
@@ -300,33 +289,10 @@ cat >> "$OUTPUT" << 'EMBED_EOF'
         var dpr = window.devicePixelRatio || 1;
         module._player_init(dpr, canvas.width, canvas.height);
 
-        // Decompress gzip'd .glif data via DecompressionStream
-        loadingLabel.textContent = 'Decompressing video...';
-        var gzB64 = document.getElementById('glifGzData').textContent.trim();
-        var gzBin = Uint8Array.from(atob(gzB64), function(c) { return c.charCodeAt(0); });
-
-        var ds = new DecompressionStream('gzip');
-        var writer = ds.writable.getWriter();
-        var reader = ds.readable.getReader();
-
-        writer.write(gzBin);
-        writer.close();
-
-        var chunks = [];
-        var totalLen = 0;
-        while (true) {
-            var result = await reader.read();
-            if (result.done) break;
-            chunks.push(result.value);
-            totalLen += result.value.length;
-        }
-
-        var glifBytes = new Uint8Array(totalLen);
-        var offset = 0;
-        for (var i = 0; i < chunks.length; i++) {
-            glifBytes.set(chunks[i], offset);
-            offset += chunks[i].length;
-        }
+        // Decode base64 .glif data
+        loadingLabel.textContent = 'Decoding video...';
+        var glifB64 = document.getElementById('glifData').textContent.trim();
+        var glifBytes = Uint8Array.from(atob(glifB64), function(c) { return c.charCodeAt(0); });
 
         // Load into WASM player
         loadingLabel.textContent = 'Loading player...';

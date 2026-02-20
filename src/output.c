@@ -403,6 +403,8 @@ int glif_writer_init_v2(GlifWriter *gw, const char *path,
     gw->enc_buf2 = NULL;
     gw->enc_cap2 = 0;
     gw->keyframe_interval = 0;
+    gw->quant_shift = 0;
+    gw->threshold = 0;
 
     uint8_t version = GLIF_VERSION;
     uint8_t flags = dark_mode ? GLIF_FLAG_DARK : 0;
@@ -460,6 +462,14 @@ void glif_writer_set_keyframe_interval(GlifWriter *gw, int interval) {
     gw->keyframe_interval = interval > 0 ? interval : 0;
 }
 
+void glif_writer_set_quant(GlifWriter *gw, int bits) {
+    gw->quant_shift = (bits >= 1 && bits <= 4) ? bits : 0;
+}
+
+void glif_writer_set_threshold(GlifWriter *gw, int thresh) {
+    gw->threshold = (thresh >= 0 && thresh <= 255) ? thresh : 0;
+}
+
 void glif_writer_frame(GlifWriter *gw, const GlifGrid *grid) {
     if (gw->err) return;
     int total = grid->rows * grid->cols;
@@ -482,6 +492,30 @@ void glif_writer_frame(GlifWriter *gw, const GlifGrid *grid) {
         gw->cur[i * 4 + 1] = cell->r;
         gw->cur[i * 4 + 2] = cell->g;
         gw->cur[i * 4 + 3] = cell->b;
+    }
+
+    /* Quantize RGB channels */
+    if (gw->quant_shift > 0) {
+        uint8_t mask = (uint8_t)(0xFF << gw->quant_shift);
+        for (int i = 0; i < total; i++) {
+            gw->cur[i*4+1] &= mask;
+            gw->cur[i*4+2] &= mask;
+            gw->cur[i*4+3] &= mask;
+        }
+    }
+
+    /* Temporal thresholding — snap near-identical cells to prev */
+    if (gw->threshold > 0 && gw->frames > 0) {
+        int t = gw->threshold;
+        for (int i = 0; i < total; i++) {
+            int o = i * 4;
+            if (gw->cur[o] == gw->prev[o] &&
+                abs(gw->cur[o+1] - gw->prev[o+1]) <= t &&
+                abs(gw->cur[o+2] - gw->prev[o+2]) <= t &&
+                abs(gw->cur[o+3] - gw->prev[o+3]) <= t) {
+                memcpy(gw->cur + o, gw->prev + o, 4);
+            }
+        }
     }
 
     int best_size = 0x7FFFFFFF;

@@ -75,6 +75,8 @@ typedef struct {
     uint8_t *enc_buf2;  /* second encoding buffer for trying v3 codecs */
     size_t enc_cap2;
     int keyframe_interval; /* 0 = auto, >0 = force keyframe every N frames */
+    int quant_shift;   /* bits to drop from RGB (0=off, 1-4) */
+    int threshold;     /* max per-channel diff to snap (0=off) */
 } GlifWriter;
 
 int  glif_writer_init(GlifWriter *gw, const char *path,
@@ -84,6 +86,8 @@ int  glif_writer_init_v2(GlifWriter *gw, const char *path,
                          int cols, int rows, int cell_w, int cell_h,
                          float fps, int dark_mode, int compressed);
 void glif_writer_set_keyframe_interval(GlifWriter *gw, int interval);
+void glif_writer_set_quant(GlifWriter *gw, int bits);
+void glif_writer_set_threshold(GlifWriter *gw, int thresh);
 void glif_writer_frame(GlifWriter *gw, const GlifGrid *grid);
 int  glif_writer_finish(GlifWriter *gw);
 

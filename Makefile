@@ -94,8 +94,8 @@ tests/test_match: tests/test_match.c src/sampling.o src/match.o src/font.o src/i
 tests/test_font: tests/test_font.c src/font.o src/sampling.o src/image.o
 	$(CC) $(TCFLAGS) -o $@ tests/test_font.c src/font.o src/sampling.o src/image.o $(LDFLAGS)
 
-tests/test_output: tests/test_output.c src/output.o src/compress.o src/font.o src/image.o src/sampling.o src/grid.o src/contrast.o src/match.o vendor/miniz.o
-	$(CC) $(TCFLAGS) -o $@ tests/test_output.c src/output.o src/compress.o src/font.o src/image.o src/sampling.o src/grid.o src/contrast.o src/match.o vendor/miniz.o $(LDFLAGS)
+tests/test_output: tests/test_output.c src/output.o src/compress.o src/glif.o src/font.o src/image.o src/sampling.o src/grid.o src/contrast.o src/match.o vendor/miniz.o
+	$(CC) $(TCFLAGS) -o $@ tests/test_output.c src/output.o src/compress.o src/glif.o src/font.o src/image.o src/sampling.o src/grid.o src/contrast.o src/match.o vendor/miniz.o $(LDFLAGS)
 
 tests/test_temporal: tests/test_temporal.c src/temporal.o src/image.o src/sampling.o src/grid.o src/contrast.o src/match.o src/font.o
 	$(CC) $(TCFLAGS) -o $@ tests/test_temporal.c src/temporal.o src/image.o src/sampling.o src/grid.o src/contrast.o src/match.o src/font.o $(LDFLAGS)
