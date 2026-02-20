@@ -38,6 +38,7 @@ static struct {
     uint8_t *color_buf;    /* cols*rows*3, RGB for GL upload */
     uint8_t *glif_data;    /* retained copy of .glif buffer */
     size_t glif_len;
+    float hdr_intensity;   /* 0.0 = off, 1.0 = full HDR effect */
     int loaded, initialized;
 } player;
 
@@ -166,13 +167,21 @@ void player_render(void) {
 
     vp_render_raw(&player.vp, player.char_buf, player.color_buf,
                   hdr->cols, hdr->rows,
-                  player.canvas_w, player.canvas_h);
+                  player.canvas_w, player.canvas_h,
+                  player.hdr_intensity);
 }
 
 EMSCRIPTEN_KEEPALIVE
 void player_resize(int w, int h) {
     player.canvas_w = w;
     player.canvas_h = h;
+}
+
+EMSCRIPTEN_KEEPALIVE
+void player_set_hdr(float intensity) {
+    if (intensity < 0.0f) intensity = 0.0f;
+    if (intensity > 1.0f) intensity = 1.0f;
+    player.hdr_intensity = intensity;
 }
 
 /* ── Header accessors ── */

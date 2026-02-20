@@ -55,6 +55,7 @@ canvas { display: block; max-width: 100%; max-height: 100%; object-fit: contain;
   justify-content: center; transition: background 0.15s;
 }
 .btn:hover { background: rgba(255,255,255,0.08); }
+.btn.active { color: var(--accent); }
 .btn svg { width: 20px; height: 20px; fill: currentColor; }
 
 .progress-wrap {
@@ -125,6 +126,10 @@ input[type=file] { display: none; }
       <option value="4">4x</option>
     </select>
 
+    <button class="btn" id="hdrBtn" title="HDR Enhancement (H)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
+    </button>
+
     <button class="btn" id="openBtn" title="Open file">
       <svg viewBox="0 0 24 24"><path d="M19 20H5a2 2 0 01-2-2V6a2 2 0 012-2h5l2 2h7a2 2 0 012 2v10a2 2 0 01-2 2z" fill="none" stroke="currentColor" stroke-width="2"/></svg>
     </button>
@@ -154,6 +159,7 @@ const progressWrap = document.getElementById('progressWrap');
 const progressFill = document.getElementById('progressFill');
 const speedSel = document.getElementById('speed');
 const openBtn = document.getElementById('openBtn');
+const hdrBtn = document.getElementById('hdrBtn');
 const fullscreenBtn = document.getElementById('fullscreenBtn');
 const playerWrap = document.getElementById('playerWrap');
 const canvasArea = document.getElementById('canvasArea');
@@ -162,6 +168,7 @@ const infoText = document.getElementById('infoText');
 
 let player = null;
 let mounted = false;
+let hdrOn = false;
 
 async function ensureMount() {
   if (mounted) return;
@@ -262,6 +269,16 @@ speedSel.addEventListener('change', () => {
   if (player) player.setSpeed(parseFloat(speedSel.value));
 });
 
+// HDR
+function toggleHDR() {
+  if (!player) return;
+  hdrOn = !hdrOn;
+  player.setHDR(hdrOn ? 0.7 : 0.0);
+  hdrBtn.classList.toggle('active', hdrOn);
+  if (!player.isPlaying) player.seek(player.currentFrame);
+}
+hdrBtn.addEventListener('click', toggleHDR);
+
 // File open
 dropOverlay.addEventListener('click', () => filePicker.click());
 openBtn.addEventListener('click', () => filePicker.click());
@@ -306,6 +323,9 @@ document.addEventListener('keydown', (e) => {
       break;
     case 'f': case 'F':
       toggleFullscreen();
+      break;
+    case 'h': case 'H':
+      toggleHDR();
       break;
     case 'ArrowLeft':
       if (player) { player.seek(Math.max(0, player.currentFrame - Math.round(player.fps * 5))); updateUI(player.currentFrame); }

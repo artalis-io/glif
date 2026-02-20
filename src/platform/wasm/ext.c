@@ -72,6 +72,9 @@ static struct {
     /* Resolution mode */
     int hi_res; /* 0 = ~120 cols, 1 = ~240 cols */
 
+    /* HDR tone mapping */
+    float hdr_intensity; /* 0.0 = off, 1.0 = full effect */
+
     int initialized;
 } ext;
 
@@ -108,7 +111,7 @@ static void vp_render(const GlifGrid *grid) {
     }
 
     vp_render_raw(&ext.vp, char_data, color_data, cols, rows,
-                  ext.canvas_w, ext.canvas_h);
+                  ext.canvas_w, ext.canvas_h, ext.hdr_intensity);
 
     free(char_data);
     free(color_data);
@@ -273,6 +276,13 @@ EMSCRIPTEN_KEEPALIVE
 void ext_set_params(float dir_crunch, float global_crunch) {
     ext.dir_crunch = dir_crunch;
     ext.global_crunch = global_crunch;
+}
+
+EMSCRIPTEN_KEEPALIVE
+void ext_set_hdr(float intensity) {
+    if (intensity < 0.0f) intensity = 0.0f;
+    if (intensity > 1.0f) intensity = 1.0f;
+    ext.hdr_intensity = intensity;
 }
 
 EMSCRIPTEN_KEEPALIVE

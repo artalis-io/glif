@@ -162,6 +162,7 @@ canvas { display: block; max-width: 100%; max-height: 100%; object-fit: contain;
   justify-content: center; transition: background 0.15s;
 }
 .btn:hover { background: rgba(255,255,255,0.08); }
+.btn.active { color: var(--accent); }
 .btn svg { width: 20px; height: 20px; fill: currentColor; }
 
 .progress-wrap {
@@ -229,6 +230,10 @@ canvas { display: block; max-width: 100%; max-height: 100%; object-fit: contain;
       <option value="4">4x</option>
     </select>
 
+    <button class="btn" id="hdrBtn" title="HDR Enhancement (H)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
+    </button>
+
     <button class="btn" id="fullscreenBtn" title="Fullscreen (F)">
       <svg viewBox="0 0 24 24"><path d="M8 3H5a2 2 0 00-2 2v3m18 0V5a2 2 0 00-2-2h-3m0 18h3a2 2 0 002-2v-3M3 16v3a2 2 0 002 2h3" fill="none" stroke="currentColor" stroke-width="2"/></svg>
     </button>
@@ -278,6 +283,7 @@ cat >> "$OUTPUT" << 'EMBED_EOF'
     var progressWrap = document.getElementById('progressWrap');
     var progressFill = document.getElementById('progressFill');
     var speedSel = document.getElementById('speed');
+    var hdrBtn = document.getElementById('hdrBtn');
     var fullscreenBtn = document.getElementById('fullscreenBtn');
     var playerWrap = document.getElementById('playerWrap');
     var canvasArea = document.getElementById('canvasArea');
@@ -348,6 +354,7 @@ cat >> "$OUTPUT" << 'EMBED_EOF'
         var lastTime = 0;
         var accumulator = 0;
         var rafId = null;
+        var hdrOn = false;
 
         function formatTime(seconds) {
             var m = Math.floor(seconds / 60);
@@ -428,6 +435,13 @@ cat >> "$OUTPUT" << 'EMBED_EOF'
             syncPlayIcon();
         }
 
+        function toggleHDR() {
+            hdrOn = !hdrOn;
+            module._player_set_hdr(hdrOn ? 0.7 : 0.0);
+            hdrBtn.classList.toggle('active', hdrOn);
+            if (!playing) seek(currentFrame);
+        }
+
         function toggleFullscreen() {
             if (document.fullscreenElement) {
                 document.exitFullscreen();
@@ -466,6 +480,7 @@ cat >> "$OUTPUT" << 'EMBED_EOF'
             speed = parseFloat(speedSel.value);
         });
 
+        hdrBtn.addEventListener('click', toggleHDR);
         fullscreenBtn.addEventListener('click', toggleFullscreen);
         document.addEventListener('fullscreenchange', function() { sizeCanvas(); });
 
@@ -478,6 +493,9 @@ cat >> "$OUTPUT" << 'EMBED_EOF'
                     break;
                 case 'f': case 'F':
                     toggleFullscreen();
+                    break;
+                case 'h': case 'H':
+                    toggleHDR();
                     break;
                 case 'ArrowLeft':
                     seek(Math.max(0, currentFrame - Math.round(fps * 5)));

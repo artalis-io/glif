@@ -151,7 +151,7 @@ static void vp_render(const GlifGrid *grid, Clay_BoundingBox bounds) {
     glScissor(vp_x, vp_y, vp_w, vp_h);
     glViewport(vp_x, vp_y, vp_w, vp_h);
 
-    vp_draw(&app.vp, cols, rows, vp_w, vp_h);
+    vp_draw(&app.vp, cols, rows, vp_w, vp_h, 0.0f);
 
     glDisable(GL_SCISSOR_TEST);
 }

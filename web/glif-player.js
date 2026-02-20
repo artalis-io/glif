@@ -26,6 +26,9 @@ export class GlifPlayer {
         this._cellH = 0;
         this._flags = 0;
 
+        // HDR
+        this._hdrIntensity = 0;
+
         // Callbacks
         this.onload = null;
         this.onframe = null;
@@ -73,6 +76,7 @@ export class GlifPlayer {
         const h = canvasElement.height;
 
         this._module._player_init(dpr, w, h);
+        if (this._hdrIntensity > 0) this._module._player_set_hdr(this._hdrIntensity);
         this._mounted = true;
     }
 
@@ -153,6 +157,15 @@ export class GlifPlayer {
      */
     setSpeed(multiplier) {
         this._speed = Math.max(0.1, Math.min(multiplier, 10));
+    }
+
+    /**
+     * Set HDR tone mapping intensity.
+     * @param {number} intensity - 0.0 (off) to 1.0 (full effect)
+     */
+    setHDR(intensity) {
+        this._hdrIntensity = Math.max(0, Math.min(1, intensity));
+        if (this._module) this._module._player_set_hdr(this._hdrIntensity);
     }
 
     /**

@@ -151,7 +151,7 @@ wasm: $(WASM_UI_SRC)
 WASM_EXT_SRC = $(CORE_SRC) src/platform/wasm/ext.c
 
 WASM_EXT_EXPORTS = '_ext_init','_ext_resize','_ext_frame','_ext_render', \
-                   '_ext_set_params','_ext_set_hires','_malloc','_free'
+                   '_ext_set_params','_ext_set_hdr','_ext_set_hires','_malloc','_free'
 
 # Shared library
 ifeq ($(UNAME_S),Darwin)
@@ -192,6 +192,7 @@ WASM_PLAYER_SRC = src/glif.c src/compress.c src/platform/wasm/player.c
 
 WASM_PLAYER_EXPORTS = '_player_init','_player_load','_player_decode_frame', \
                       '_player_render','_player_resize','_player_free', \
+                      '_player_set_hdr', \
                       '_player_get_frames','_player_get_fps', \
                       '_player_get_cols','_player_get_rows', \
                       '_player_get_cell_w','_player_get_cell_h', \

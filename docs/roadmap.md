@@ -138,7 +138,8 @@ Full-featured web player (`web/player.html`) for `.glif` files with a dark moder
 - **File loading** — Drag-and-drop or click to open `.glif` files via file picker
 - **Playback controls** — Play/pause, click-to-seek progress bar, speed selector (0.25x–4x)
 - **Fullscreen** — Fullscreen API with responsive canvas sizing
-- **Keyboard shortcuts** — Space (play/pause), F (fullscreen), left/right arrows (seek ±5s), up/down arrows (speed)
+- **HDR enhancement** — Toggle shader-based tone mapping (H key or sun icon button)
+- **Keyboard shortcuts** — Space (play/pause), F (fullscreen), H (HDR), left/right arrows (seek ±5s), up/down arrows (speed)
 - **Auto-load** — Fetches `mk421.glif` if present, or accepts `window.__GLIF_EMBED_DATA` for embed mode
 - **Info bar** — File metadata: grid size, cell size, fps, frame count, duration
 - **DPR-aware** — Proper HiDPI/Retina canvas sizing using `devicePixelRatio`
@@ -157,7 +158,7 @@ Bundle a `.glif` file + WASM player into a single self-contained HTML file that 
 - Inlines the Emscripten JS loader and player logic
 - Passes `wasmBinary` to the Emscripten factory to avoid external fetches
 - Auto-plays on load with full player controls (play/pause, seek, speed, fullscreen)
-- Same dark modern UI as `web/player.html`
+- Same dark modern UI as `web/player.html` including HDR toggle
 
 ### Shared WebGL Font-Atlas Renderer ✅
 
@@ -168,6 +169,20 @@ Extracted the duplicated WebGL shader code from `ext.c` and `ui.c` into a shared
 - `vp_build_font_atlas` — rasterize 95-char atlas (16x6 grid) from TTF font data
 - `vp_render_raw` — upload char/color buffers and draw (used by player)
 - `vp_upload` / `vp_draw` — split upload/draw for callers needing custom viewport/scissor (used by ui.c with Clay bounds)
+
+### HDR Contrast Enhancement ✅
+
+Shader-based tone mapping and contrast enhancement for all WebGL playback. Controlled by a single `u_hdrIntensity` uniform (0.0 = bypass, 1.0 = full effect). Works on every existing `.glif` file — no format or encoder changes needed.
+
+**Processing chain (fragment shader):**
+1. **Gamma lift** — `pow(color, vec3(gamma))` brightens midtones without clipping highlights. Gamma interpolated from 1.0 (off) to 0.8 (full intensity).
+2. **S-curve contrast** — `smoothstep` sigmoid that darkens shadows and brightens highlights, blended at 50% intensity.
+3. **Saturation boost** — Luminance-based desaturation mix at 1.0 + 0.3×intensity, making ASCII art colors pop against the black background.
+
+**API:**
+- C: `player_set_hdr(float)` / `ext_set_hdr(float)` — exported WASM functions
+- JS: `GlifPlayer.setHDR(intensity)` — clamps 0–1, applies immediately
+- UI: Sun icon toggle button in player and embed control bars, `H` keyboard shortcut (toggles between 0.0 and 0.7)
 
 ---
 

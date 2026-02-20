@@ -32,6 +32,7 @@ static const char *vp_frag_src =
     "uniform vec2 u_cellSize;\n"
     "uniform vec2 u_resolution;\n"
     "uniform vec2 u_offset;\n"
+    "uniform float u_hdrIntensity;\n"
     "void main() {\n"
     "    vec2 fragCoord = vec2(gl_FragCoord.x, u_resolution.y - gl_FragCoord.y);\n"
     "    vec2 gridCoord = fragCoord - u_offset;\n"
@@ -46,6 +47,13 @@ static const char *vp_frag_src =
     "    float row = floor(charIdx / u_atlasGrid.x);\n"
     "    vec2 atlasUV = (vec2(col, row) + inCell) / u_atlasGrid;\n"
     "    float alpha = texture2D(u_fontAtlas, atlasUV).a;\n"
+    "    if (u_hdrIntensity > 0.0) {\n"
+    "        float gamma = mix(1.0, 0.8, u_hdrIntensity);\n"
+    "        color = pow(color, vec3(gamma));\n"
+    "        color = mix(color, smoothstep(0.0, 1.0, color), u_hdrIntensity * 0.5);\n"
+    "        float luma = dot(color, vec3(0.2126, 0.7152, 0.0722));\n"
+    "        color = mix(vec3(luma), color, 1.0 + u_hdrIntensity * 0.3);\n"
+    "    }\n"
     "    gl_FragColor = vec4(color * alpha, 1.0);\n"
     "}\n";
 
@@ -190,7 +198,8 @@ static inline void vp_build_font_atlas(VpRenderState *vp,
 
 static inline void vp_draw(VpRenderState *vp,
                             int cols, int rows,
-                            int vp_w, int vp_h) {
+                            int vp_w, int vp_h,
+                            float hdr_intensity) {
     float grid_px_w = (float)cols * (float)vp->atlas_cell_w;
     float grid_px_h = (float)rows * (float)vp->atlas_cell_h;
     float scale_x = (float)vp_w / grid_px_w;
@@ -233,6 +242,8 @@ static inline void vp_draw(VpRenderState *vp,
                 (float)vp_w, (float)vp_h);
     glUniform2f(glGetUniformLocation(vp->program, "u_offset"),
                 offset_x, offset_y);
+    glUniform1f(glGetUniformLocation(vp->program, "u_hdrIntensity"),
+                hdr_intensity);
 
     glDrawArrays(GL_TRIANGLES, 0, 6);
     glDisableVertexAttribArray((GLuint)a_pos);
@@ -259,7 +270,8 @@ static inline void vp_render_raw(VpRenderState *vp,
                                   const uint8_t *char_data,
                                   const uint8_t *color_data,
                                   int cols, int rows,
-                                  int canvas_w, int canvas_h) {
+                                  int canvas_w, int canvas_h,
+                                  float hdr_intensity) {
     if (!vp->program || !vp->atlas_tex || cols <= 0 || rows <= 0)
         return;
 
@@ -274,7 +286,7 @@ static inline void vp_render_raw(VpRenderState *vp,
                  GL_RGB, GL_UNSIGNED_BYTE, color_data);
 
     glViewport(0, 0, canvas_w, canvas_h);
-    vp_draw(vp, cols, rows, canvas_w, canvas_h);
+    vp_draw(vp, cols, rows, canvas_w, canvas_h, hdr_intensity);
 }
 
 #endif /* GLIF_VP_RENDER_H */
