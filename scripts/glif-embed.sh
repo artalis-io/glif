@@ -3,8 +3,9 @@
 #
 # Usage: ./scripts/glif-embed.sh input.glif [-o output.html]
 #
-# The output is a single HTML file with the WASM module, WASM binary, and
-# .glif data all inlined as base64. No server required — just open in a browser.
+# The .glif data is gzip-compressed before base64 encoding, then decompressed
+# in the browser via DecompressionStream. The WASM binary and JS loader are
+# also inlined. No server required — just open the HTML in a browser.
 
 set -euo pipefail
 
@@ -15,10 +16,19 @@ WEB_DIR="$PROJECT_DIR/web"
 WASM_JS="$WEB_DIR/glif-player-wasm.js"
 WASM_BIN="$WEB_DIR/glif-player-wasm.wasm"
 
+# Max recommended .glif size for embedding (50MB raw → ~45MB gzip → ~60MB b64)
+MAX_GLIF_SIZE=$((50 * 1048576))
+
 usage() {
-    echo "Usage: $0 <input.glif> [-o output.html]"
+    echo "Usage: $0 <input.glif> [-o output.html] [--force]"
     echo ""
     echo "Bundles a .glif file into a self-contained HTML video player."
+    echo "The .glif data is gzip-compressed to reduce file size."
+    echo ""
+    echo "Options:"
+    echo "  -o <path>   Output HTML file (default: <input>.html)"
+    echo "  --force     Skip size warning for large files"
+    echo ""
     echo "Requires: make wasm-player (produces web/glif-player-wasm.js + .wasm)"
     exit 1
 }
@@ -26,9 +36,11 @@ usage() {
 # Parse args
 INPUT=""
 OUTPUT=""
+FORCE=0
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -o) OUTPUT="$2"; shift 2 ;;
+        --force) FORCE=1; shift ;;
         -h|--help) usage ;;
         *)
             if [[ -z "$INPUT" ]]; then
@@ -54,23 +66,38 @@ NAME="$(basename "$INPUT")"
 GLIF_SIZE=$(wc -c < "$INPUT" | tr -d ' ')
 WASM_SIZE=$(wc -c < "$WASM_BIN" | tr -d ' ')
 
+# Size warning
+if [[ $GLIF_SIZE -gt $MAX_GLIF_SIZE ]] && [[ $FORCE -eq 0 ]]; then
+    GLIF_MB=$(echo "$GLIF_SIZE" | awk '{printf "%.0f", $1/1048576}')
+    echo "Warning: $NAME is ${GLIF_MB}MB — the embedded HTML may be too large for browsers."
+    echo "Consider using a shorter clip or lower resolution."
+    echo "Use --force to proceed anyway, or Ctrl+C to cancel."
+    read -r -p "Continue? [y/N] " response
+    case "$response" in
+        [yY]*) ;;
+        *) echo "Aborted."; exit 0 ;;
+    esac
+fi
+
 echo "Embedding: $NAME ($GLIF_SIZE bytes)"
 echo "WASM binary: $WASM_SIZE bytes"
-echo "Output: $OUTPUT"
+
+# Gzip compress the .glif data
+echo "Compressing .glif data..."
+GLIF_GZ=$(mktemp)
+trap 'rm -f "$GLIF_GZ"' EXIT
+gzip -9c "$INPUT" > "$GLIF_GZ"
+GZ_SIZE=$(wc -c < "$GLIF_GZ" | tr -d ' ')
+RATIO=$(echo "$GLIF_SIZE $GZ_SIZE" | awk '{printf "%.1f", (1 - $2/$1) * 100}')
+echo "  Compressed: $GZ_SIZE bytes (${RATIO}% reduction)"
 
 # Base64 encode
-echo "Encoding .glif data..."
-GLIF_B64=$(base64 < "$INPUT" | tr -d '\n')
+echo "Encoding compressed .glif data..."
+GLIF_B64=$(base64 < "$GLIF_GZ" | tr -d '\n')
 echo "Encoding WASM binary..."
 WASM_B64=$(base64 < "$WASM_BIN" | tr -d '\n')
-echo "Reading WASM JS loader..."
-WASM_JS_CONTENT=$(cat "$WASM_JS")
 
-# Calculate sizes
-GLIF_B64_LEN=${#GLIF_B64}
-WASM_B64_LEN=${#WASM_B64}
-
-echo "Generating HTML..."
+echo "Generating HTML → $OUTPUT"
 
 cat > "$OUTPUT" << 'EMBED_EOF'
 <!DOCTYPE html>
@@ -175,7 +202,7 @@ canvas { display: block; max-width: 100%; max-height: 100%; object-fit: contain;
   <div class="canvas-area" id="canvasArea">
     <div class="loading-overlay" id="loadingOverlay">
       <div class="spinner"></div>
-      <div class="label">Loading...</div>
+      <div class="label" id="loadingLabel">Decompressing...</div>
     </div>
     <canvas id="glif-player-canvas" width="1280" height="720"></canvas>
   </div>
@@ -229,217 +256,254 @@ cat "$WASM_JS" >> "$OUTPUT"
 
 cat >> "$OUTPUT" << 'EMBED_EOF'
 </script>
-<script>
-// --- Inline .glif data (base64) ---
 EMBED_EOF
 
-echo "var __GLIF_B64 = \"$GLIF_B64\";" >> "$OUTPUT"
-echo "var __GLIF_NAME = \"$NAME\";" >> "$OUTPUT"
+# Write the gzip'd glif data inside a non-JS script tag to avoid JS parser overhead
+echo '<script type="application/octet-stream" id="glifGzData">' >> "$OUTPUT"
+echo "$GLIF_B64" >> "$OUTPUT"
+echo '</script>' >> "$OUTPUT"
+
+echo "<script>var __GLIF_NAME = \"$NAME\";</script>" >> "$OUTPUT"
 
 cat >> "$OUTPUT" << 'EMBED_EOF'
-</script>
 <script>
 (async function() {
-    const canvas = document.getElementById('glif-player-canvas');
-    const loadingOverlay = document.getElementById('loadingOverlay');
-    const playPauseBtn = document.getElementById('playPause');
-    const iconPlay = document.getElementById('iconPlay');
-    const iconPause = document.getElementById('iconPause');
-    const timeDisplay = document.getElementById('timeDisplay');
-    const progressWrap = document.getElementById('progressWrap');
-    const progressFill = document.getElementById('progressFill');
-    const speedSel = document.getElementById('speed');
-    const fullscreenBtn = document.getElementById('fullscreenBtn');
-    const playerWrap = document.getElementById('playerWrap');
-    const canvasArea = document.getElementById('canvasArea');
-    const infoBar = document.getElementById('infoBar');
-    const infoText = document.getElementById('infoText');
+    var loadingLabel = document.getElementById('loadingLabel');
+    var canvas = document.getElementById('glif-player-canvas');
+    var loadingOverlay = document.getElementById('loadingOverlay');
+    var playPauseBtn = document.getElementById('playPause');
+    var iconPlay = document.getElementById('iconPlay');
+    var iconPause = document.getElementById('iconPause');
+    var timeDisplay = document.getElementById('timeDisplay');
+    var progressWrap = document.getElementById('progressWrap');
+    var progressFill = document.getElementById('progressFill');
+    var speedSel = document.getElementById('speed');
+    var fullscreenBtn = document.getElementById('fullscreenBtn');
+    var playerWrap = document.getElementById('playerWrap');
+    var canvasArea = document.getElementById('canvasArea');
+    var infoBar = document.getElementById('infoBar');
+    var infoText = document.getElementById('infoText');
 
-    // Decode WASM binary from base64
-    const wasmBytes = Uint8Array.from(atob(__WASM_B64), c => c.charCodeAt(0));
-    const wasmBinary = wasmBytes.buffer;
+    try {
+        // Decode WASM binary from base64
+        loadingLabel.textContent = 'Initializing WASM...';
+        var wasmBytes = Uint8Array.from(atob(__WASM_B64), function(c) { return c.charCodeAt(0); });
 
-    // Initialize WASM with inline binary
-    const module = await createGlifPlayer({ wasmBinary: wasmBinary });
-    const dpr = window.devicePixelRatio || 1;
-    module._player_init(dpr, canvas.width, canvas.height);
+        // Initialize WASM with inline binary
+        var module = await createGlifPlayer({ wasmBinary: wasmBytes.buffer });
+        var dpr = window.devicePixelRatio || 1;
+        module._player_init(dpr, canvas.width, canvas.height);
 
-    // Decode .glif data
-    const glifBytes = Uint8Array.from(atob(__GLIF_B64), c => c.charCodeAt(0));
-    const ptr = module._malloc(glifBytes.length);
-    module.HEAPU8.set(glifBytes, ptr);
-    const loadResult = module._player_load(ptr, glifBytes.length);
-    module._free(ptr);
+        // Decompress gzip'd .glif data via DecompressionStream
+        loadingLabel.textContent = 'Decompressing video...';
+        var gzB64 = document.getElementById('glifGzData').textContent.trim();
+        var gzBin = Uint8Array.from(atob(gzB64), function(c) { return c.charCodeAt(0); });
 
-    if (loadResult !== 0) {
-        loadingOverlay.querySelector('.label').textContent = 'Error: failed to parse .glif';
-        loadingOverlay.querySelector('.spinner').style.display = 'none';
-        return;
-    }
+        var ds = new DecompressionStream('gzip');
+        var writer = ds.writable.getWriter();
+        var reader = ds.readable.getReader();
 
-    const frames = module._player_get_frames();
-    const fps = module._player_get_fps();
-    const cols = module._player_get_cols();
-    const rows = module._player_get_rows();
-    const cellW = module._player_get_cell_w();
-    const cellH = module._player_get_cell_h();
+        writer.write(gzBin);
+        writer.close();
 
-    // Playback state
-    let playing = false;
-    let currentFrame = 0;
-    let speed = 1.0;
-    let lastTime = 0;
-    let accumulator = 0;
-    let rafId = null;
-
-    function formatTime(seconds) {
-        const m = Math.floor(seconds / 60);
-        const s = Math.floor(seconds % 60);
-        return `${m}:${s.toString().padStart(2, '0')}`;
-    }
-
-    function updateUI(frame) {
-        const cur = frame / fps;
-        const total = frames / fps;
-        timeDisplay.textContent = `${formatTime(cur)} / ${formatTime(total)}`;
-        progressFill.style.width = `${(frame / (frames - 1)) * 100}%`;
-    }
-
-    function syncPlayIcon() {
-        if (playing) {
-            iconPlay.style.display = 'none';
-            iconPause.style.display = '';
-        } else {
-            iconPlay.style.display = '';
-            iconPause.style.display = 'none';
+        var chunks = [];
+        var totalLen = 0;
+        while (true) {
+            var result = await reader.read();
+            if (result.done) break;
+            chunks.push(result.value);
+            totalLen += result.value.length;
         }
-    }
 
-    function sizeCanvas() {
-        const aspect = cols * cellW / (rows * cellH);
-        const rect = canvasArea.getBoundingClientRect();
-        let w = rect.width;
-        let h = rect.height;
-        if (w / h > aspect) { w = h * aspect; } else { h = w / aspect; }
-        const d = window.devicePixelRatio || 1;
-        canvas.width = Math.round(w * d);
-        canvas.height = Math.round(h * d);
-        canvas.style.width = Math.round(w) + 'px';
-        canvas.style.height = Math.round(h) + 'px';
-        module._player_resize(canvas.width, canvas.height);
-    }
-
-    function seek(frame) {
-        frame = Math.max(0, Math.min(frame, frames - 1));
-        currentFrame = frame;
-        module._player_decode_frame(frame);
-        module._player_render();
-        updateUI(frame);
-    }
-
-    function tick(now) {
-        if (!playing) return;
-        const dt = (now - lastTime) / 1000;
-        lastTime = now;
-        accumulator += dt * speed;
-        const frameDur = 1 / fps;
-        let advanced = false;
-        while (accumulator >= frameDur) {
-            accumulator -= frameDur;
-            currentFrame++;
-            if (currentFrame >= frames) currentFrame = 0;
-            advanced = true;
+        var glifBytes = new Uint8Array(totalLen);
+        var offset = 0;
+        for (var i = 0; i < chunks.length; i++) {
+            glifBytes.set(chunks[i], offset);
+            offset += chunks[i].length;
         }
-        if (advanced) {
-            module._player_decode_frame(currentFrame);
+
+        // Load into WASM player
+        loadingLabel.textContent = 'Loading player...';
+        var ptr = module._malloc(glifBytes.length);
+        module.HEAPU8.set(glifBytes, ptr);
+        var loadResult = module._player_load(ptr, glifBytes.length);
+        module._free(ptr);
+
+        if (loadResult !== 0) {
+            loadingLabel.textContent = 'Error: failed to parse .glif data';
+            return;
+        }
+
+        var frames = module._player_get_frames();
+        var fps = module._player_get_fps();
+        var cols = module._player_get_cols();
+        var rows = module._player_get_rows();
+        var cellW = module._player_get_cell_w();
+        var cellH = module._player_get_cell_h();
+
+        // Playback state
+        var playing = false;
+        var currentFrame = 0;
+        var speed = 1.0;
+        var lastTime = 0;
+        var accumulator = 0;
+        var rafId = null;
+
+        function formatTime(seconds) {
+            var m = Math.floor(seconds / 60);
+            var s = Math.floor(seconds % 60);
+            return m + ':' + String(s).padStart(2, '0');
+        }
+
+        function updateUI(frame) {
+            var cur = frame / fps;
+            var total = frames / fps;
+            timeDisplay.textContent = formatTime(cur) + ' / ' + formatTime(total);
+            progressFill.style.width = ((frame / (frames - 1)) * 100) + '%';
+        }
+
+        function syncPlayIcon() {
+            if (playing) {
+                iconPlay.style.display = 'none';
+                iconPause.style.display = '';
+            } else {
+                iconPlay.style.display = '';
+                iconPause.style.display = 'none';
+            }
+        }
+
+        function sizeCanvas() {
+            var aspect = cols * cellW / (rows * cellH);
+            var rect = canvasArea.getBoundingClientRect();
+            var w = rect.width;
+            var h = rect.height;
+            if (w / h > aspect) { w = h * aspect; } else { h = w / aspect; }
+            var d = window.devicePixelRatio || 1;
+            canvas.width = Math.round(w * d);
+            canvas.height = Math.round(h * d);
+            canvas.style.width = Math.round(w) + 'px';
+            canvas.style.height = Math.round(h) + 'px';
+            module._player_resize(canvas.width, canvas.height);
+        }
+
+        function seek(frame) {
+            frame = Math.max(0, Math.min(frame, frames - 1));
+            currentFrame = frame;
+            module._player_decode_frame(frame);
             module._player_render();
-            updateUI(currentFrame);
+            updateUI(frame);
         }
-        rafId = requestAnimationFrame(tick);
-    }
 
-    function togglePlay() {
-        if (playing) {
-            playing = false;
-            if (rafId !== null) { cancelAnimationFrame(rafId); rafId = null; }
-        } else {
-            playing = true;
-            lastTime = performance.now();
-            accumulator = 0;
+        function tick(now) {
+            if (!playing) return;
+            var dt = (now - lastTime) / 1000;
+            lastTime = now;
+            accumulator += dt * speed;
+            var frameDur = 1 / fps;
+            var advanced = false;
+            while (accumulator >= frameDur) {
+                accumulator -= frameDur;
+                currentFrame++;
+                if (currentFrame >= frames) currentFrame = 0;
+                advanced = true;
+            }
+            if (advanced) {
+                module._player_decode_frame(currentFrame);
+                module._player_render();
+                updateUI(currentFrame);
+            }
             rafId = requestAnimationFrame(tick);
         }
-        syncPlayIcon();
-    }
 
-    function toggleFullscreen() {
-        if (document.fullscreenElement) {
-            document.exitFullscreen();
-        } else {
-            playerWrap.requestFullscreen().catch(function(){});
+        function togglePlay() {
+            if (playing) {
+                playing = false;
+                if (rafId !== null) { cancelAnimationFrame(rafId); rafId = null; }
+            } else {
+                playing = true;
+                lastTime = performance.now();
+                accumulator = 0;
+                rafId = requestAnimationFrame(tick);
+            }
+            syncPlayIcon();
         }
-    }
 
-    // Size canvas and render first frame
-    sizeCanvas();
-    seek(0);
-
-    const dur = formatTime(frames / fps);
-    infoText.textContent = `${__GLIF_NAME} \u2014 ${cols}\u00d7${rows} \u00b7 ${cellW}\u00d7${cellH}px \u00b7 ${fps} fps \u00b7 ${frames} frames \u00b7 ${dur}`;
-    infoBar.classList.remove('hidden');
-    loadingOverlay.classList.add('hidden');
-
-    // Auto-play
-    togglePlay();
-
-    // Event listeners
-    playPauseBtn.addEventListener('click', togglePlay);
-    canvasArea.addEventListener('click', function(e) {
-        if (e.target === canvas || e.target === canvasArea) togglePlay();
-    });
-
-    progressWrap.addEventListener('click', function(e) {
-        const rect = progressWrap.getBoundingClientRect();
-        const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-        seek(Math.round(pct * (frames - 1)));
-    });
-
-    speedSel.addEventListener('change', function() {
-        speed = parseFloat(speedSel.value);
-    });
-
-    fullscreenBtn.addEventListener('click', toggleFullscreen);
-    document.addEventListener('fullscreenchange', function() { sizeCanvas(); });
-
-    document.addEventListener('keydown', function(e) {
-        if (e.target.tagName === 'SELECT') return;
-        switch (e.key) {
-            case ' ':
-                e.preventDefault();
-                togglePlay();
-                break;
-            case 'f': case 'F':
-                toggleFullscreen();
-                break;
-            case 'ArrowLeft':
-                seek(Math.max(0, currentFrame - Math.round(fps * 5)));
-                break;
-            case 'ArrowRight':
-                seek(Math.min(frames - 1, currentFrame + Math.round(fps * 5)));
-                break;
-            case 'ArrowUp':
-                e.preventDefault();
-                speed = Math.min(10, speed * 2);
-                speedSel.value = speed;
-                break;
-            case 'ArrowDown':
-                e.preventDefault();
-                speed = Math.max(0.25, speed / 2);
-                speedSel.value = speed;
-                break;
+        function toggleFullscreen() {
+            if (document.fullscreenElement) {
+                document.exitFullscreen();
+            } else {
+                playerWrap.requestFullscreen().catch(function(){});
+            }
         }
-    });
 
-    window.addEventListener('resize', function() { sizeCanvas(); });
+        // Size canvas and render first frame
+        sizeCanvas();
+        seek(0);
+
+        var dur = formatTime(frames / fps);
+        infoText.textContent = __GLIF_NAME + ' \u2014 ' + cols + '\u00d7' + rows +
+            ' \u00b7 ' + cellW + '\u00d7' + cellH + 'px \u00b7 ' + fps +
+            ' fps \u00b7 ' + frames + ' frames \u00b7 ' + dur;
+        infoBar.classList.remove('hidden');
+        loadingOverlay.classList.add('hidden');
+
+        // Auto-play
+        togglePlay();
+
+        // Event listeners
+        playPauseBtn.addEventListener('click', togglePlay);
+        canvasArea.addEventListener('click', function(e) {
+            if (e.target === canvas || e.target === canvasArea) togglePlay();
+        });
+
+        progressWrap.addEventListener('click', function(e) {
+            var rect = progressWrap.getBoundingClientRect();
+            var pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+            seek(Math.round(pct * (frames - 1)));
+        });
+
+        speedSel.addEventListener('change', function() {
+            speed = parseFloat(speedSel.value);
+        });
+
+        fullscreenBtn.addEventListener('click', toggleFullscreen);
+        document.addEventListener('fullscreenchange', function() { sizeCanvas(); });
+
+        document.addEventListener('keydown', function(e) {
+            if (e.target.tagName === 'SELECT') return;
+            switch (e.key) {
+                case ' ':
+                    e.preventDefault();
+                    togglePlay();
+                    break;
+                case 'f': case 'F':
+                    toggleFullscreen();
+                    break;
+                case 'ArrowLeft':
+                    seek(Math.max(0, currentFrame - Math.round(fps * 5)));
+                    break;
+                case 'ArrowRight':
+                    seek(Math.min(frames - 1, currentFrame + Math.round(fps * 5)));
+                    break;
+                case 'ArrowUp':
+                    e.preventDefault();
+                    speed = Math.min(10, speed * 2);
+                    speedSel.value = speed;
+                    break;
+                case 'ArrowDown':
+                    e.preventDefault();
+                    speed = Math.max(0.25, speed / 2);
+                    speedSel.value = speed;
+                    break;
+            }
+        });
+
+        window.addEventListener('resize', function() { sizeCanvas(); });
+
+    } catch (err) {
+        loadingLabel.textContent = 'Error: ' + err.message;
+        console.error(err);
+    }
 })();
 </script>
 </body>
@@ -447,6 +511,7 @@ cat >> "$OUTPUT" << 'EMBED_EOF'
 EMBED_EOF
 
 OUTPUT_SIZE=$(wc -c < "$OUTPUT" | tr -d ' ')
+OUTPUT_MB=$(echo "$OUTPUT_SIZE" | awk '{printf "%.1f", $1/1048576}')
 echo ""
-echo "Done! Self-contained HTML: $OUTPUT ($OUTPUT_SIZE bytes)"
+echo "Done! Self-contained HTML: $OUTPUT (${OUTPUT_MB}MB)"
 echo "Open in any browser — no server required."
