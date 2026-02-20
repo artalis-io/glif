@@ -1,4 +1,5 @@
 #include "output.h"
+#include "compress.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -372,6 +373,13 @@ static int write_f32(FILE *f, float v) {
 int glif_writer_init(GlifWriter *gw, const char *path,
                      int cols, int rows, int cell_w, int cell_h,
                      float fps, int dark_mode) {
+    return glif_writer_init_v2(gw, path, cols, rows, cell_w, cell_h,
+                               fps, dark_mode, 0);
+}
+
+int glif_writer_init_v2(GlifWriter *gw, const char *path,
+                        int cols, int rows, int cell_w, int cell_h,
+                        float fps, int dark_mode, int compressed) {
     if (cols > 65535 || rows > 65535 || cell_w > 65535 || cell_h > 65535) {
         fprintf(stderr, "error: grid dimensions too large for .glif format\n");
         return -1;
@@ -384,12 +392,22 @@ int glif_writer_init(GlifWriter *gw, const char *path,
     gw->frames = 0;
     gw->cells = cols * rows;
     gw->err = 0;
+    gw->compressed = compressed;
+    gw->prev = NULL;
+    gw->cur = NULL;
+    gw->work = NULL;
+    gw->enc_buf = NULL;
+    gw->enc_cap = 0;
+
+    uint8_t version = compressed ? GLIF_VERSION_2 : GLIF_VERSION_1;
+    uint8_t flags = dark_mode ? GLIF_FLAG_DARK : 0;
+    if (compressed) flags |= GLIF_FLAG_COMPRESSED;
 
     /* Write header (24 bytes) */
     int e = 0;
     e |= (fwrite(GLIF_MAGIC, 1, 4, gw->file) != 4) ? -1 : 0;
-    e |= write_u8(gw->file, GLIF_VERSION);
-    e |= write_u8(gw->file, dark_mode ? GLIF_FLAG_DARK : 0);
+    e |= write_u8(gw->file, version);
+    e |= write_u8(gw->file, flags);
     e |= write_u16(gw->file, (uint16_t)cols);
     e |= write_u16(gw->file, (uint16_t)rows);
     e |= write_u16(gw->file, (uint16_t)cell_w);
@@ -399,17 +417,112 @@ int glif_writer_init(GlifWriter *gw, const char *path,
     e |= write_u16(gw->file, 0);                  /* reserved */
     if (e) { gw->err = 1; }
 
+    /* Allocate compression buffers */
+    if (compressed) {
+        size_t buf_size = (size_t)gw->cells * 4;
+        gw->prev = calloc(buf_size, 1);
+        gw->cur = malloc(buf_size);
+        gw->work = malloc(buf_size);
+        /* Worst case is the larger of RLE bound and delta bound */
+        size_t rle_b = glif_compress_rle_bound(gw->cells);
+        size_t delta_b = glif_compress_delta_bound(gw->cells);
+        gw->enc_cap = rle_b > delta_b ? rle_b : delta_b;
+        gw->enc_buf = malloc(gw->enc_cap);
+        if (!gw->prev || !gw->cur || !gw->work || !gw->enc_buf) {
+            fprintf(stderr, "error: failed to allocate compression buffers\n");
+            free(gw->prev); free(gw->cur); free(gw->work); free(gw->enc_buf);
+            gw->prev = gw->cur = gw->work = gw->enc_buf = NULL;
+            fclose(gw->file);
+            gw->file = NULL;
+            return -1;
+        }
+    }
+
     return 0;
 }
 
 void glif_writer_frame(GlifWriter *gw, const GlifGrid *grid) {
     if (gw->err) return;
     int total = grid->rows * grid->cols;
+
+    if (!gw->compressed) {
+        /* v1 path: raw frame data */
+        for (int i = 0; i < total; i++) {
+            const GlifGridCell *cell = &grid->cells[i];
+            uint8_t data[4] = { (uint8_t)cell->ch, cell->r, cell->g, cell->b };
+            if (fwrite(data, 1, 4, gw->file) != 4) { gw->err = 1; return; }
+        }
+        gw->frames++;
+        return;
+    }
+
+    /* v2 path: flatten grid to cur, try all encodings, pick smallest */
     for (int i = 0; i < total; i++) {
         const GlifGridCell *cell = &grid->cells[i];
-        uint8_t data[4] = { (uint8_t)cell->ch, cell->r, cell->g, cell->b };
-        if (fwrite(data, 1, 4, gw->file) != 4) { gw->err = 1; return; }
+        gw->cur[i * 4]     = (uint8_t)cell->ch;
+        gw->cur[i * 4 + 1] = cell->r;
+        gw->cur[i * 4 + 2] = cell->g;
+        gw->cur[i * 4 + 3] = cell->b;
     }
+
+    int raw_size = total * 4;
+    int best_size = raw_size;
+    uint8_t best_type = GLIF_FRAME_RAW;
+    const uint8_t *best_data = gw->cur;
+
+    /* Try RLE */
+    int rle_size = glif_compress_rle_encode(gw->cur, total, gw->enc_buf, gw->enc_cap);
+    if (rle_size > 0 && rle_size < best_size) {
+        best_size = rle_size;
+        best_type = GLIF_FRAME_RLE;
+    }
+
+    /* Try delta variants only after first frame */
+    int delta_size = -1, delta_rle_size = -1;
+    if (gw->frames > 0 && total <= 65535) {
+        delta_size = glif_compress_delta_encode(gw->cur, gw->prev, total,
+                                                gw->enc_buf, gw->enc_cap);
+        if (delta_size > 0 && delta_size < best_size) {
+            best_size = delta_size;
+            best_type = GLIF_FRAME_DELTA;
+        }
+
+        delta_rle_size = glif_compress_delta_rle_encode(gw->cur, gw->prev, total,
+                                                         gw->work, gw->enc_buf,
+                                                         gw->enc_cap);
+        if (delta_rle_size > 0 && delta_rle_size < best_size) {
+            best_size = delta_rle_size;
+            best_type = GLIF_FRAME_DELTA_RLE;
+        }
+    }
+
+    /* Re-encode the winner into enc_buf (if it wasn't the last one tried) */
+    if (best_type == GLIF_FRAME_RAW) {
+        best_data = gw->cur;
+    } else if (best_type == GLIF_FRAME_RLE) {
+        glif_compress_rle_encode(gw->cur, total, gw->enc_buf, gw->enc_cap);
+        best_data = gw->enc_buf;
+    } else if (best_type == GLIF_FRAME_DELTA) {
+        glif_compress_delta_encode(gw->cur, gw->prev, total, gw->enc_buf, gw->enc_cap);
+        best_data = gw->enc_buf;
+    } else {
+        glif_compress_delta_rle_encode(gw->cur, gw->prev, total,
+                                       gw->work, gw->enc_buf, gw->enc_cap);
+        best_data = gw->enc_buf;
+    }
+
+    /* Write 5-byte frame envelope: [type(u8), payload_size(u32 LE)] */
+    if (write_u8(gw->file, best_type) != 0) { gw->err = 1; return; }
+    if (write_u32(gw->file, (uint32_t)best_size) != 0) { gw->err = 1; return; }
+
+    /* Write payload */
+    if (fwrite(best_data, 1, (size_t)best_size, gw->file) != (size_t)best_size) {
+        gw->err = 1;
+        return;
+    }
+
+    /* Copy cur to prev for next frame's delta */
+    memcpy(gw->prev, gw->cur, (size_t)total * 4);
     gw->frames++;
 }
 
@@ -423,5 +536,12 @@ int glif_writer_finish(GlifWriter *gw) {
 
     fclose(gw->file);
     gw->file = NULL;
+
+    /* Free compression buffers */
+    free(gw->prev);  gw->prev = NULL;
+    free(gw->cur);   gw->cur = NULL;
+    free(gw->work);  gw->work = NULL;
+    free(gw->enc_buf); gw->enc_buf = NULL;
+
     return gw->err ? -1 : 0;
 }

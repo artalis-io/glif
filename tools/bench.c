@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <time.h>
 #include "image.h"
 #include "sampling.h"
@@ -7,11 +8,26 @@
 #include "font.h"
 #include "contrast.h"
 #include "match.h"
+#include "compress.h"
+#include "output.h"
+#include "glif.h"
 
 static double now_ms(void) {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return ts.tv_sec * 1000.0 + ts.tv_nsec / 1e6;
+}
+
+/* Flatten grid to [ch, r, g, b] buffer */
+static void flatten_grid(const GlifGrid *grid, uint8_t *out) {
+    int total = grid->rows * grid->cols;
+    for (int i = 0; i < total; i++) {
+        const GlifGridCell *cell = &grid->cells[i];
+        out[i * 4]     = (uint8_t)cell->ch;
+        out[i * 4 + 1] = cell->r;
+        out[i * 4 + 2] = cell->g;
+        out[i * 4 + 3] = cell->b;
+    }
 }
 
 int main(int argc, char **argv) {
@@ -108,13 +124,68 @@ int main(int argc, char **argv) {
     t1 = now_ms();
     printf("glif_match_grid:          %6.2f ms\n", t1 - t0);
 
+    /* ── Encode/decode benchmarks ── */
+    int cells = grid.rows * grid.cols;
+    size_t buf_size = (size_t)cells * 4;
+    uint8_t *flat = malloc(buf_size);
+    flatten_grid(&grid, flat);
+
+    size_t rle_bound = glif_compress_rle_bound(cells);
+    size_t delta_bound = glif_compress_delta_bound(cells);
+    size_t enc_cap = rle_bound > delta_bound ? rle_bound : delta_bound;
+    uint8_t *enc_buf = malloc(enc_cap);
+    uint8_t *dec_buf = malloc(buf_size);
+    uint8_t *work_buf = malloc(buf_size);
+    uint8_t *zeroed = calloc(buf_size, 1);
+
+    int enc_iters = 1000;
+    printf("\n=== Encode/decode (%d iterations) ===\n", enc_iters);
+
+    /* RLE */
+    int rle_size = glif_compress_rle_encode(flat, cells, enc_buf, enc_cap);
+    t0 = now_ms();
+    for (int i = 0; i < enc_iters; i++) {
+        glif_compress_rle_encode(flat, cells, enc_buf, enc_cap);
+        glif_compress_rle_decode(enc_buf, (size_t)rle_size, dec_buf, cells);
+    }
+    t1 = now_ms();
+    printf("RLE:            %5d bytes  (%.1f%%)  %6.2f ms\n",
+           rle_size, 100.0 * rle_size / (double)buf_size, (t1 - t0) / enc_iters);
+
+    /* Delta (vs zeroed prev) */
+    int delta_size = glif_compress_delta_encode(flat, zeroed, cells, enc_buf, enc_cap);
+    t0 = now_ms();
+    for (int i = 0; i < enc_iters; i++) {
+        glif_compress_delta_encode(flat, zeroed, cells, enc_buf, enc_cap);
+        glif_compress_delta_decode(enc_buf, (size_t)delta_size, zeroed, dec_buf, cells);
+    }
+    t1 = now_ms();
+    printf("Delta:          %5d bytes  (%.1f%%)  %6.2f ms\n",
+           delta_size, 100.0 * delta_size / (double)buf_size, (t1 - t0) / enc_iters);
+
+    /* Delta+RLE (vs zeroed prev) */
+    int drle_size = glif_compress_delta_rle_encode(flat, zeroed, cells,
+                                                    work_buf, enc_buf, enc_cap);
+    t0 = now_ms();
+    for (int i = 0; i < enc_iters; i++) {
+        glif_compress_delta_rle_encode(flat, zeroed, cells, work_buf, enc_buf, enc_cap);
+        glif_compress_delta_rle_decode(enc_buf, (size_t)drle_size, zeroed,
+                                       work_buf, dec_buf, cells);
+    }
+    t1 = now_ms();
+    printf("Delta+RLE:      %5d bytes  (%.1f%%)  %6.2f ms\n",
+           drle_size, 100.0 * drle_size / (double)buf_size, (t1 - t0) / enc_iters);
+
+    printf("Raw:            %5d bytes\n", (int)buf_size);
+
     glif_grid_free(&grid);
     glif_lightness_map_free(&lm);
 
-    /* Steady-state benchmark */
+    /* ── Combined pipeline + encode FPS ── */
     int N = 100;
     printf("\n=== %d-iteration average ===\n", N);
     double total = 0;
+    double total_streaming = 0;
     for (int run = 0; run < N; run++) {
         t0 = now_ms();
 
@@ -132,18 +203,106 @@ int main(int argc, char **argv) {
         t1 = now_ms();
         total += (t1 - t0);
 
+        /* GLIF streaming: flatten + try all encodings + pick best */
+        double ts0 = now_ms();
+        int c = g.rows * g.cols;
+        flatten_grid(&g, flat);
+
+        int best = (int)buf_size;
+        glif_compress_rle_encode(flat, c, enc_buf, enc_cap);
+        int rs = glif_compress_rle_encode(flat, c, enc_buf, enc_cap);
+        if (rs > 0 && rs < best) best = rs;
+
+        if (run > 0) {
+            int ds = glif_compress_delta_encode(flat, zeroed, c, enc_buf, enc_cap);
+            if (ds > 0 && ds < best) best = ds;
+            int drs = glif_compress_delta_rle_encode(flat, zeroed, c,
+                                                      work_buf, enc_buf, enc_cap);
+            if (drs > 0 && drs < best) best = drs;
+        }
+        memcpy(zeroed, flat, buf_size);
+
+        double ts1 = now_ms();
+        total_streaming += (t1 - t0) + (ts1 - ts0);
+
         glif_grid_free(&g);
         glif_lightness_map_free(&lm3);
     }
 
     double avg = total / N;
+    double avg_stream = total_streaming / N;
     printf("avg per-frame:       %6.2f ms  (%.0f fps)\n", avg, 1000.0 / avg);
+    printf("GLIF streaming:      %6.2f ms  (%.0f fps)\n", avg_stream, 1000.0 / avg_stream);
     printf("\nGrid: %d x %d = %d cells\n",
            img.width / cell_w, img.height / cell_h,
            (img.width / cell_w) * (img.height / cell_h));
     printf("GlifImage: %d x %d = %d pixels\n",
            img.width, img.height, img.width * img.height);
 
+    /* ── Decode benchmark ── */
+    printf("\n=== Decode benchmark ===\n");
+    {
+        /* Write a compressed .glif with N frames */
+        const char *tmp_path = "/tmp/glif_bench_decode.glif";
+        int gcols = img.width / cell_w;
+        int grows = img.height / cell_h;
+
+        GlifWriter gw;
+        if (glif_writer_init_v2(&gw, tmp_path, gcols, grows, cell_w, cell_h,
+                                 30.0f, 0, 1) == 0) {
+            for (int run = 0; run < N; run++) {
+                GlifLightnessMap lm4;
+                glif_lightness_map_create(&lm4, &img);
+                GlifGrid g;
+                glif_grid_create(&g, &img, cell_w, cell_h);
+                glif_grid_compute_vectors_fast(&g, &lm4, &pm);
+                glif_grid_compute_colors(&g, &img);
+                glif_contrast_directional(&g, &sc, dir_crunch, NULL);
+                glif_contrast_global(&g, global_crunch, NULL);
+                glif_match_grid(&g, &db);
+                glif_writer_frame(&gw, &g);
+                glif_grid_free(&g);
+                glif_lightness_map_free(&lm4);
+            }
+            glif_writer_finish(&gw);
+
+            /* Read buffer */
+            FILE *f = fopen(tmp_path, "rb");
+            if (f) {
+                fseek(f, 0, SEEK_END);
+                long flen = ftell(f);
+                rewind(f);
+                uint8_t *fbuf = malloc((size_t)flen);
+                if (fbuf && fread(fbuf, 1, (size_t)flen, f) == (size_t)flen) {
+                    fclose(f);
+
+                    GlifReader gr;
+                    if (glif_reader_open(&gr, fbuf, (size_t)flen) == 0) {
+                        t0 = now_ms();
+                        for (uint32_t i = 0; i < gr.header.frames; i++) {
+                            glif_reader_decode(&gr, i);
+                        }
+                        t1 = now_ms();
+                        double dec_avg = (t1 - t0) / gr.header.frames;
+                        printf("decode:          %6.3f ms/frame  (%.0f fps)  [%u frames]\n",
+                               dec_avg, 1000.0 / dec_avg, gr.header.frames);
+                        glif_reader_close(&gr);
+                    }
+                    free(fbuf);
+                } else {
+                    if (fbuf) free(fbuf);
+                    fclose(f);
+                }
+            }
+            remove(tmp_path);
+        }
+    }
+
+    free(flat);
+    free(enc_buf);
+    free(dec_buf);
+    free(work_buf);
+    free(zeroed);
     glif_sampling_precompute_free(&pm);
     glif_char_db_free(&db);
     glif_image_free(&img);

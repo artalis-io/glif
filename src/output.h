@@ -54,20 +54,32 @@ void glif_ppm_pipe_free(GlifPpmPipe *pp);
 
 /* .glif binary format — see docs/roadmap.md for full spec. */
 #define GLIF_MAGIC "GLIF"
-#define GLIF_VERSION 1
+#define GLIF_VERSION_1       1
+#define GLIF_VERSION_2       2
 #define GLIF_HEADER_SIZE 24
-#define GLIF_FLAG_DARK 0x01
+#define GLIF_FLAG_DARK       0x01
+#define GLIF_FLAG_COMPRESSED 0x02
 
 typedef struct {
     FILE *file;
     uint32_t frames;
     int cells;        /* cols × rows */
     int err;          /* sticky write-error flag */
+    /* v2 compression (all NULL when v1) */
+    int compressed;
+    uint8_t *prev;      /* previous decoded frame, cells*4 */
+    uint8_t *cur;       /* flattened current frame, cells*4 */
+    uint8_t *work;      /* XOR scratch buffer, cells*4 */
+    uint8_t *enc_buf;   /* encoding output, worst-case sized */
+    size_t enc_cap;
 } GlifWriter;
 
 int  glif_writer_init(GlifWriter *gw, const char *path,
                       int cols, int rows, int cell_w, int cell_h,
                       float fps, int dark_mode);
+int  glif_writer_init_v2(GlifWriter *gw, const char *path,
+                         int cols, int rows, int cell_w, int cell_h,
+                         float fps, int dark_mode, int compressed);
 void glif_writer_frame(GlifWriter *gw, const GlifGrid *grid);
 int  glif_writer_finish(GlifWriter *gw);
 

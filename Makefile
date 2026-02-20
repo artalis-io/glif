@@ -33,13 +33,15 @@ endif
 DEBUG_LDFLAGS = -lm -fsanitize=address,undefined
 
 SRC = src/main.c src/image.c src/sampling.c src/grid.c src/font.c \
-      src/contrast.c src/match.c src/output.c src/temporal.c
+      src/contrast.c src/match.c src/output.c src/temporal.c src/compress.c \
+      src/glif.c
 OBJ = $(SRC:.c=.o)
 BIN = glif
 
 # Library objects (everything except main.o)
 LIB_OBJ = src/image.o src/sampling.o src/grid.o src/font.o \
-           src/contrast.o src/match.o src/output.o src/temporal.o
+           src/contrast.o src/match.o src/output.o src/temporal.o src/compress.o \
+           src/glif.o
 
 # Linux-only: v4l2 output
 UNAME := $(shell uname)
@@ -50,7 +52,8 @@ endif
 
 TESTS = tests/test_vec6 tests/test_sampling tests/test_image \
         tests/test_grid tests/test_contrast tests/test_match \
-        tests/test_font tests/test_output tests/test_temporal
+        tests/test_font tests/test_output tests/test_temporal \
+        tests/test_compress tests/test_glif
 
 all: $(BIN)
 
@@ -88,11 +91,17 @@ tests/test_match: tests/test_match.c src/sampling.o src/match.o src/font.o src/i
 tests/test_font: tests/test_font.c src/font.o src/sampling.o src/image.o
 	$(CC) $(TCFLAGS) -o $@ tests/test_font.c src/font.o src/sampling.o src/image.o $(LDFLAGS)
 
-tests/test_output: tests/test_output.c src/output.o src/font.o src/image.o src/sampling.o src/grid.o src/contrast.o src/match.o
-	$(CC) $(TCFLAGS) -o $@ tests/test_output.c src/output.o src/font.o src/image.o src/sampling.o src/grid.o src/contrast.o src/match.o $(LDFLAGS)
+tests/test_output: tests/test_output.c src/output.o src/compress.o src/font.o src/image.o src/sampling.o src/grid.o src/contrast.o src/match.o
+	$(CC) $(TCFLAGS) -o $@ tests/test_output.c src/output.o src/compress.o src/font.o src/image.o src/sampling.o src/grid.o src/contrast.o src/match.o $(LDFLAGS)
 
 tests/test_temporal: tests/test_temporal.c src/temporal.o src/image.o src/sampling.o src/grid.o src/contrast.o src/match.o src/font.o
 	$(CC) $(TCFLAGS) -o $@ tests/test_temporal.c src/temporal.o src/image.o src/sampling.o src/grid.o src/contrast.o src/match.o src/font.o $(LDFLAGS)
+
+tests/test_compress: tests/test_compress.c src/compress.o
+	$(CC) $(TCFLAGS) -o $@ tests/test_compress.c src/compress.o $(LDFLAGS)
+
+tests/test_glif: tests/test_glif.c src/glif.o src/compress.o src/output.o src/grid.o src/image.o src/sampling.o src/font.o src/contrast.o src/match.o
+	$(CC) $(TCFLAGS) -o $@ tests/test_glif.c src/glif.o src/compress.o src/output.o src/grid.o src/image.o src/sampling.o src/font.o src/contrast.o src/match.o $(LDFLAGS)
 
 test: $(LIB_OBJ) $(TESTS)
 	@echo "=== Running tests ==="
@@ -178,9 +187,30 @@ wasm-ext: $(WASM_EXT_SRC)
 	  -s NO_FILESYSTEM=1 --no-entry \
 	  -o extension/wasm/glif-ext.js $(WASM_EXT_SRC) -lm
 
+# WASM player for .glif playback (minimal deps, no pipeline)
+WASM_PLAYER_SRC = src/glif.c src/compress.c src/platform/wasm/player.c
+
+WASM_PLAYER_EXPORTS = '_player_init','_player_load','_player_decode_frame', \
+                      '_player_render','_player_resize','_player_free', \
+                      '_player_get_frames','_player_get_fps', \
+                      '_player_get_cols','_player_get_rows', \
+                      '_player_get_cell_w','_player_get_cell_h', \
+                      '_player_get_flags','_malloc','_free'
+
+wasm-player: $(WASM_PLAYER_SRC)
+	@mkdir -p web
+	emcc -std=gnu11 -O2 -Ivendor -Isrc \
+	  -Isrc/platform/wasm \
+	  -s WASM=1 -s ALLOW_MEMORY_GROWTH=1 -s FULL_ES2=1 \
+	  -s MODULARIZE=1 -s EXPORT_NAME='createGlifPlayer' \
+	  -s "EXPORTED_FUNCTIONS=[$(WASM_PLAYER_EXPORTS)]" \
+	  -s "EXPORTED_RUNTIME_METHODS=['HEAPU8']" \
+	  -s NO_FILESYSTEM=1 --no-entry \
+	  -o web/glif-player-wasm.js $(WASM_PLAYER_SRC) -lm
+
 clean:
 	rm -f $(OBJ) $(BIN) $(TESTS)
 	rm -f src/*.pic.o src/platform/linux/*.o src/platform/linux/*.pic.o src/platform/wasm/*.o
 	rm -f libglif.so libglif.dylib
 
-.PHONY: all clean test debug wasm wasm-ext shared
+.PHONY: all clean test debug wasm wasm-ext wasm-player shared

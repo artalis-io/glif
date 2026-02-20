@@ -37,6 +37,7 @@ typedef struct {
     int pipe_raw;  /* video: write raw RGB24 frames to stdout (no headers) */
     const char *glif_path; /* video: write .glif binary file */
     const char *v4l2_device; /* video: write to v4l2loopback device (Linux) */
+    int compress;  /* video: enable v2 compressed .glif output */
     GlifAdaptiveContrast adaptive; /* adaptive contrast params */
 } Config;
 
@@ -65,6 +66,7 @@ static void usage(const char *prog) {
         "  --pipe-raw               Video: write raw RGB24 frames to stdout (no headers)\n"
         "  --v4l2 <device>          Video: write to v4l2loopback device (Linux only)\n"
         "  --output-glif <path>     Video: write .glif binary capture file\n"
+        "  --compress               Enable v2 RLE+delta compression for .glif output\n"
         "  --help                   Show this message\n",
         prog, prog);
 }
@@ -89,6 +91,7 @@ static int parse_args(Config *cfg, int argc, char **argv) {
     cfg->pipe_raw = 0;
     cfg->glif_path = NULL;
     cfg->v4l2_device = NULL;
+    cfg->compress = 0;
     cfg->adaptive.floor = -1.0f;  /* disabled by default */
     cfg->adaptive.ceil = 80.0f / 255.0f;
 
@@ -184,6 +187,8 @@ static int parse_args(Config *cfg, int argc, char **argv) {
         } else if (strcmp(argv[i], "--output-glif") == 0) {
             if (++i >= argc) { fprintf(stderr, "error: --output-glif requires path\n"); return -1; }
             cfg->glif_path = argv[i];
+        } else if (strcmp(argv[i], "--compress") == 0) {
+            cfg->compress = 1;
         } else if (strcmp(argv[i], "-a") == 0 || strcmp(argv[i], "--auto-fit") == 0) {
             cfg->auto_fit = 1;
         } else if (strcmp(argv[i], "-c") == 0 || strcmp(argv[i], "--color") == 0) {
@@ -234,6 +239,10 @@ static int parse_args(Config *cfg, int argc, char **argv) {
         return -1;
     }
 #endif
+    if (cfg->compress && !cfg->glif_path) {
+        fprintf(stderr, "error: --compress requires --output-glif\n");
+        return -1;
+    }
     return 0;
 }
 
@@ -434,9 +443,10 @@ static int run_video(Config *cfg) {
     V4l2Output vo = {0};
 #endif
     if (cfg->glif_path) {
-        if (glif_writer_init(&gw, cfg->glif_path, cols, rows,
-                             cfg->cell_w, cfg->cell_h,
-                             cfg->fps, cfg->dark_mode) != 0) {
+        if (glif_writer_init_v2(&gw, cfg->glif_path, cols, rows,
+                                cfg->cell_w, cfg->cell_h,
+                                cfg->fps, cfg->dark_mode,
+                                cfg->compress) != 0) {
             free(lm.data);
             glif_grid_free(&grid);
             free(frame_buf);
