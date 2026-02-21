@@ -13,6 +13,7 @@
 #include "contrast.h"
 #include "match.h"
 #include "output.h"
+#include "blip.h"
 #ifdef __linux__
 #include "platform/linux/v4l2_output.h"
 #endif
@@ -41,6 +42,11 @@ typedef struct {
     int quant_bits;    /* RGB bits to keep (4-8, 8=off) */
     int threshold;     /* temporal snap threshold (0=off) */
     GlifAdaptiveContrast adaptive; /* adaptive contrast params */
+    int audio;             /* enable crushed PCM audio encoding */
+    int keep_audio;        /* embed original audio as Opus */
+    int audio_rate;        /* output sample rate for crushed PCM (default: 8000) */
+    int audio_depth;       /* output bit depth (4 or 8, default: 8) */
+    const char *audio_pcm_path; /* path to raw PCM file (s16le, mono, 44100) */
 } Config;
 
 static void usage(const char *prog) {
@@ -71,6 +77,11 @@ static void usage(const char *prog) {
         "  --compress               Enable v2 RLE+delta compression for .glif output\n"
         "  --quant <bits>           RGB bits to keep (4-8, default 6 with --compress, 8=off)\n"
         "  --threshold <n>          Temporal snap threshold (0-255, default 4 with --compress)\n"
+        "  --audio                  Enable crushed PCM audio (requires --output-glif)\n"
+        "  --keep-audio             Embed original audio as Opus (requires --audio)\n"
+        "  --audio-rate <hz>        Output sample rate (default: 8000)\n"
+        "  --audio-depth <bits>     Output bit depth, 4 or 8 (default: 8)\n"
+        "  --audio-pcm <path>       Path to raw PCM file (s16le, mono, 44100)\n"
         "  --help                   Show this message\n",
         prog, prog);
 }
@@ -100,6 +111,11 @@ static int parse_args(Config *cfg, int argc, char **argv) {
     cfg->threshold = -1;
     cfg->adaptive.floor = -1.0f;  /* disabled by default */
     cfg->adaptive.ceil = 80.0f / 255.0f;
+    cfg->audio = 0;
+    cfg->keep_audio = 0;
+    cfg->audio_rate = 8000;
+    cfg->audio_depth = 8;
+    cfg->audio_pcm_path = NULL;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--help") == 0) {
@@ -211,6 +227,29 @@ static int parse_args(Config *cfg, int argc, char **argv) {
                 fprintf(stderr, "error: invalid threshold '%s' (must be 0-255)\n", argv[i]); return -1;
             }
             cfg->threshold = (int)val;
+        } else if (strcmp(argv[i], "--audio") == 0) {
+            cfg->audio = 1;
+        } else if (strcmp(argv[i], "--keep-audio") == 0) {
+            cfg->keep_audio = 1;
+        } else if (strcmp(argv[i], "--audio-rate") == 0) {
+            if (++i >= argc) { fprintf(stderr, "error: --audio-rate requires argument\n"); return -1; }
+            char *end;
+            long val = strtol(argv[i], &end, 10);
+            if (end == argv[i] || val < 2000 || val > 48000) {
+                fprintf(stderr, "error: invalid audio-rate '%s' (2000-48000)\n", argv[i]); return -1;
+            }
+            cfg->audio_rate = (int)val;
+        } else if (strcmp(argv[i], "--audio-depth") == 0) {
+            if (++i >= argc) { fprintf(stderr, "error: --audio-depth requires argument\n"); return -1; }
+            char *end2;
+            long val = strtol(argv[i], &end2, 10);
+            if (val != 4 && val != 8) {
+                fprintf(stderr, "error: --audio-depth must be 4 or 8\n"); return -1;
+            }
+            cfg->audio_depth = (int)val;
+        } else if (strcmp(argv[i], "--audio-pcm") == 0) {
+            if (++i >= argc) { fprintf(stderr, "error: --audio-pcm requires argument\n"); return -1; }
+            cfg->audio_pcm_path = argv[i];
         } else if (strcmp(argv[i], "-a") == 0 || strcmp(argv[i], "--auto-fit") == 0) {
             cfg->auto_fit = 1;
         } else if (strcmp(argv[i], "-c") == 0 || strcmp(argv[i], "--color") == 0) {
@@ -279,6 +318,18 @@ static int parse_args(Config *cfg, int argc, char **argv) {
     }
     if (cfg->threshold > 0 && !cfg->compress) {
         fprintf(stderr, "error: --threshold requires --compress\n");
+        return -1;
+    }
+    if (cfg->audio && !cfg->glif_path) {
+        fprintf(stderr, "error: --audio requires --output-glif\n");
+        return -1;
+    }
+    if (cfg->keep_audio && !cfg->audio) {
+        fprintf(stderr, "error: --keep-audio requires --audio\n");
+        return -1;
+    }
+    if (cfg->audio && !cfg->audio_pcm_path) {
+        fprintf(stderr, "error: --audio requires --audio-pcm <path>\n");
         return -1;
     }
     return 0;
@@ -480,6 +531,10 @@ static int run_video(Config *cfg) {
 #ifdef __linux__
     V4l2Output vo = {0};
 #endif
+    FILE *audio_file = NULL;
+    int16_t *audio_buf = NULL;
+    int audio_samples_per_frame = 0;
+
     if (cfg->glif_path) {
         if (glif_writer_init_v2(&gw, cfg->glif_path, cols, rows,
                                 cfg->cell_w, cfg->cell_h,
@@ -496,6 +551,37 @@ static int run_video(Config *cfg) {
             glif_writer_set_quant(&gw, 8 - cfg->quant_bits);
         if (cfg->threshold > 0)
             glif_writer_set_threshold(&gw, cfg->threshold);
+
+        /* Enable crushed PCM audio if requested */
+        if (cfg->audio && cfg->audio_pcm_path) {
+            audio_file = fopen(cfg->audio_pcm_path, "rb");
+            if (!audio_file) {
+                fprintf(stderr, "error: cannot open audio PCM file '%s'\n",
+                        cfg->audio_pcm_path);
+            } else {
+                int audio_sr = 44100;
+                int audio_ch = 1;
+                if (glif_writer_enable_audio(&gw, audio_sr, audio_ch,
+                                             cfg->audio_rate,
+                                             cfg->audio_depth) != 0) {
+                    fprintf(stderr, "error: failed to enable audio encoder\n");
+                    fclose(audio_file);
+                    audio_file = NULL;
+                } else {
+                    /* Read one video frame worth of PCM per iteration */
+                    audio_samples_per_frame = audio_sr / (int)cfg->fps;
+                    audio_buf = malloc((size_t)audio_samples_per_frame *
+                                       (size_t)audio_ch * sizeof(int16_t));
+                    if (!audio_buf) {
+                        fprintf(stderr, "error: failed to allocate audio buffer\n");
+                        fclose(audio_file);
+                        audio_file = NULL;
+                    }
+                    fprintf(stderr, "Audio: %d Hz → %d Hz %d-bit crushed PCM\n",
+                            audio_sr, cfg->audio_rate, cfg->audio_depth);
+                }
+            }
+        }
     }
     int needs_ppm_pipe = cfg->pipe_ppm || cfg->pipe_raw || cfg->v4l2_device;
     if (needs_ppm_pipe) {
@@ -579,6 +665,14 @@ static int run_video(Config *cfg) {
         /* Render */
         if (gw.file) glif_writer_frame(&gw, &grid);
 
+        /* Feed one video frame's worth of PCM to the crushed PCM encoder */
+        if (audio_file && audio_buf) {
+            size_t read = fread(audio_buf, sizeof(int16_t),
+                                (size_t)audio_samples_per_frame, audio_file);
+            if (read > 0)
+                glif_writer_audio_samples(&gw, audio_buf, (int)read);
+        }
+
         if (cfg->v4l2_device) {
             glif_ppm_pipe_render(&pp, &grid, &db);
 #ifdef __linux__
@@ -637,10 +731,16 @@ static int run_video(Config *cfg) {
 #endif
 
     /* Cleanup */
+    if (audio_file) fclose(audio_file);
+    free(audio_buf);
     if (gw.file) {
         glif_writer_finish(&gw);
-        fprintf(stderr, "Wrote %s (%u frames, %d×%d grid, %.1f fps)\n",
+        fprintf(stderr, "Wrote %s (%u frames, %d×%d grid, %.1f fps",
                 cfg->glif_path, gw.frames, cols, rows, cfg->fps);
+        if (gw.blip && blip_encoder_samples(gw.blip) > 0)
+            fprintf(stderr, ", %u audio samples @ %d Hz %d-bit",
+                    blip_encoder_samples(gw.blip), cfg->audio_rate, cfg->audio_depth);
+        fprintf(stderr, ")\n");
     }
 #ifdef __linux__
     if (cfg->v4l2_device) v4l2_output_free(&vo);

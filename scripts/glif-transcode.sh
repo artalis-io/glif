@@ -24,6 +24,10 @@ INPUT=
 OUTPUT=
 GRID_W=
 GRID_H=
+BLIP_AUDIO=0
+KEEP_AUDIO=0
+AUDIO_RATE=50
+GLIF_OUTPUT=
 
 usage() {
     cat <<'EOF'
@@ -60,6 +64,10 @@ while [ $# -gt 0 ]; do
         -s|--scale)  SCALE="$2"; shift 2 ;;
         --crf)       CRF="$2"; shift 2 ;;
         --grid)      GRID_W="$2"; GRID_H="$3"; shift 3 ;;
+        --blip)      BLIP_AUDIO=1; shift ;;
+        --keep-audio) KEEP_AUDIO=1; shift ;;
+        --audio-rate) AUDIO_RATE="$2"; shift 2 ;;
+        --output-glif) GLIF_OUTPUT="$2"; shift 2 ;;
         -d|--dir-crunch)    DIR_CRUNCH="$2"; shift 2 ;;
         -g|--global-crunch) GLOBAL_CRUNCH="$2"; shift 2 ;;
         --adapt-floor) ADAPT_FLOOR="$2"; shift 2 ;;
@@ -186,6 +194,22 @@ TMPDIR=$(mktemp -d)
 trap 'rm -rf "$TMPDIR"' EXIT
 TMP_VIDEO="$TMPDIR/video.mp4"
 
+# Extract audio as raw PCM if blip audio encoding is requested
+AUDIO_FLAGS=""
+if [ "$BLIP_AUDIO" -eq 1 ] && [ -n "$HAS_AUDIO" ]; then
+    echo "Extracting audio as PCM..." >&2
+    ffmpeg -v warning -i "$INPUT" \
+        -f s16le -acodec pcm_s16le -ac 1 -ar 44100 \
+        "$TMPDIR/audio.pcm"
+    AUDIO_FLAGS="--audio --audio-pcm $TMPDIR/audio.pcm --audio-rate $AUDIO_RATE"
+fi
+
+# Build .glif output flags if requested
+GLIF_FLAGS=""
+if [ -n "$GLIF_OUTPUT" ]; then
+    GLIF_FLAGS="--output-glif $GLIF_OUTPUT --compress $AUDIO_FLAGS"
+fi
+
 echo "Pass 1: rendering ASCII art..." >&2
 
 ffmpeg -v warning -stats -i "$INPUT" \
@@ -194,7 +218,8 @@ ffmpeg -v warning -stats -i "$INPUT" \
         -f "$FONT" -w "$CELL_W" -h "$CELL_H" --pipe-raw --dark \
         -s "$SCALE" --fps "$SRC_FPS" \
         -d "$DIR_CRUNCH" -g "$GLOBAL_CRUNCH" \
-        ${ADAPT_FLOOR:+--adapt-floor "$ADAPT_FLOOR" --adapt-ceil "$ADAPT_CEIL"} 2>/dev/null | \
+        ${ADAPT_FLOOR:+--adapt-floor "$ADAPT_FLOOR" --adapt-ceil "$ADAPT_CEIL"} \
+        $GLIF_FLAGS 2>/dev/null | \
     ffmpeg -v warning -stats \
         -f rawvideo -pix_fmt rgb24 -video_size "${OUT_W}x${OUT_H}" \
         -framerate "$SRC_FPS" -i - \

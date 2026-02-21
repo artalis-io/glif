@@ -219,6 +219,10 @@ canvas { display: block; max-width: 100%; max-height: 100%; object-fit: contain;
       <option value="4">4x</option>
     </select>
 
+    <button class="btn" id="audioBtn" title="Toggle Audio (A)" style="display:none">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>
+    </button>
+
     <button class="btn" id="hdrBtn" title="HDR Enhancement (H)">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
     </button>
@@ -273,6 +277,7 @@ cat >> "$OUTPUT" << 'EMBED_EOF'
     var progressFill = document.getElementById('progressFill');
     var speedSel = document.getElementById('speed');
     var hdrBtn = document.getElementById('hdrBtn');
+    var audioBtn = document.getElementById('audioBtn');
     var fullscreenBtn = document.getElementById('fullscreenBtn');
     var playerWrap = document.getElementById('playerWrap');
     var canvasArea = document.getElementById('canvasArea');
@@ -365,6 +370,7 @@ cat >> "$OUTPUT" << 'EMBED_EOF'
             module._player_decode_frame(frame);
             module._player_render();
             updateUI(frame);
+            if (playing) { stopAudio(); startAudio(); }
         }
 
         function tick(now) {
@@ -383,6 +389,7 @@ cat >> "$OUTPUT" << 'EMBED_EOF'
             if (advanced) {
                 module._player_decode_frame(currentFrame);
                 module._player_render();
+                playAudioForFrame(currentFrame);
                 updateUI(currentFrame);
             }
             rafId = requestAnimationFrame(tick);
@@ -392,11 +399,13 @@ cat >> "$OUTPUT" << 'EMBED_EOF'
             if (playing) {
                 playing = false;
                 if (rafId !== null) { cancelAnimationFrame(rafId); rafId = null; }
+                stopAudio();
             } else {
                 playing = true;
                 lastTime = performance.now();
                 accumulator = 0;
                 rafId = requestAnimationFrame(tick);
+                startAudio();
             }
             syncPlayIcon();
         }
@@ -407,6 +416,85 @@ cat >> "$OUTPUT" << 'EMBED_EOF'
             hdrBtn.classList.toggle('active', hdrOn);
             if (!playing) seek(currentFrame);
         }
+
+        // Audio state (crushed PCM playback)
+        var hasAudio = false;
+        try { hasAudio = !!module._player_has_audio(); } catch(e) {}
+        var audioCtx = null;
+        var audioGainNode = null;
+        var audioBuffer = null;     // decoded AudioBuffer from crushed PCM
+        var audioSource = null;     // current AudioBufferSourceNode
+        var audioMuted = true;
+
+        if (hasAudio) {
+            audioBtn.style.display = '';
+        }
+
+        function buildAudioBuffer() {
+            if (!hasAudio) return;
+            try {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                audioGainNode = audioCtx.createGain();
+                audioGainNode.gain.value = 0;
+                audioGainNode.connect(audioCtx.destination);
+
+                var pcmPtr = module._player_get_audio_pcm_ptr();
+                var pcmLen = module._player_get_audio_pcm_len();
+                var sampleRate = module._player_get_audio_sample_rate();
+                var bitDepth = module._player_get_audio_bit_depth();
+
+                if (!pcmPtr || pcmLen <= 0 || sampleRate <= 0) { hasAudio = false; return; }
+
+                audioBuffer = audioCtx.createBuffer(1, pcmLen, sampleRate);
+                var channel = audioBuffer.getChannelData(0);
+                var maxVal = (bitDepth === 4) ? 15 : 255;
+                var mid = maxVal / 2;
+                for (var i = 0; i < pcmLen; i++) {
+                    channel[i] = (module.HEAPU8[pcmPtr + i] - mid) / mid;
+                }
+            } catch(e) { hasAudio = false; }
+        }
+
+        function startAudio() {
+            if (!hasAudio || audioMuted || !audioCtx || !audioBuffer) return;
+            if (audioCtx.state === 'suspended') audioCtx.resume();
+            stopAudio();
+            var offset = currentFrame / fps;
+            if (offset >= audioBuffer.duration) return;
+            audioSource = audioCtx.createBufferSource();
+            audioSource.buffer = audioBuffer;
+            audioSource.playbackRate.value = speed;
+            audioSource.loop = true;
+            audioSource.connect(audioGainNode);
+            audioSource.start(0, offset);
+        }
+
+        function stopAudio() {
+            if (audioSource) {
+                try { audioSource.stop(); } catch(e) {}
+                audioSource.disconnect();
+                audioSource = null;
+            }
+        }
+
+        function toggleAudio() {
+            audioMuted = !audioMuted;
+            audioBtn.classList.toggle('active', !audioMuted);
+            if (audioGainNode) {
+                audioGainNode.gain.value = audioMuted ? 0 : 1;
+            }
+            if (!audioMuted && playing) {
+                startAudio();
+            } else if (audioMuted) {
+                stopAudio();
+            }
+        }
+
+        function playAudioForFrame(videoFrame) {
+            /* no-op: audio plays continuously via AudioBufferSourceNode */
+        }
+
+        buildAudioBuffer();
 
         function toggleFullscreen() {
             if (document.fullscreenElement) {
@@ -444,9 +532,11 @@ cat >> "$OUTPUT" << 'EMBED_EOF'
 
         speedSel.addEventListener('change', function() {
             speed = parseFloat(speedSel.value);
+            if (audioSource) audioSource.playbackRate.value = speed;
         });
 
         hdrBtn.addEventListener('click', toggleHDR);
+        audioBtn.addEventListener('click', toggleAudio);
         fullscreenBtn.addEventListener('click', toggleFullscreen);
         document.addEventListener('fullscreenchange', function() { sizeCanvas(); });
 
@@ -463,6 +553,9 @@ cat >> "$OUTPUT" << 'EMBED_EOF'
                 case 'h': case 'H':
                     toggleHDR();
                     break;
+                case 'a': case 'A':
+                    toggleAudio();
+                    break;
                 case 'ArrowLeft':
                     seek(Math.max(0, currentFrame - Math.round(fps * 5)));
                     break;
@@ -473,11 +566,13 @@ cat >> "$OUTPUT" << 'EMBED_EOF'
                     e.preventDefault();
                     speed = Math.min(10, speed * 2);
                     speedSel.value = speed;
+                    if (audioSource) audioSource.playbackRate.value = speed;
                     break;
                 case 'ArrowDown':
                     e.preventDefault();
                     speed = Math.max(0.25, speed / 2);
                     speedSel.value = speed;
+                    if (audioSource) audioSource.playbackRate.value = speed;
                     break;
             }
         });

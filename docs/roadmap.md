@@ -33,7 +33,7 @@ Header (24 bytes, little-endian):
   Offset  Size  Field
   0       4     magic:    "GLIF"
   4       1     version:  uint8    (1)
-  5       1     flags:    uint8    (bit 0: dark_mode, bit 1: compressed)
+  5       1     flags:    uint8    (bit 0: dark_mode, bit 1: compressed, bit 2: audio)
   6       2     cols:     uint16
   8       2     rows:     uint16
   10      2     cell_w:   uint16
@@ -196,6 +196,53 @@ Extracted the duplicated WebGL shader code from `ext.c` and `ui.c` into a shared
 - `vp_build_font_atlas` — rasterize 95-char atlas (16x6 grid) from TTF font data
 - `vp_render_raw` — upload char/color buffers and draw (used by player)
 - `vp_upload` / `vp_draw` — split upload/draw for callers needing custom viewport/scissor (used by ui.c with Clay bounds)
+
+### Crushed PCM Audio ✅
+
+Retro lo-fi audio embedded in `.glif` files. The original audio is downsampled and quantized to 8-bit unsigned PCM at a low sample rate (default 8kHz), then deflate-compressed and appended after the video frames as a BLIP v2 section. Sounds like telephone-quality retro audio — preserves speech and music while fitting the aesthetic.
+
+**BLIP v2 section format:**
+
+```
+BLIP header (16 bytes, little-endian):
+  Offset  Size  Field
+  0       4     magic:       "BLIP"
+  4       1     version:     uint8 (2)
+  5       1     bit_depth:   uint8 (4 or 8)
+  6       2     sample_rate: uint16 (e.g. 8000)
+  8       4     num_samples: uint32
+  12      4     data_size:   uint32 (compressed size)
+
+Followed by deflate-compressed unsigned PCM data.
+4-bit mode: two samples per byte (high nibble first), then deflate.
+```
+
+**Encoder (`src/blip.c`):**
+- Linear-interpolation resampling from source rate (e.g. 44100) to destination rate (e.g. 8000)
+- Stereo-to-mono downmix
+- Signed 16-bit → unsigned 8-bit (or 4-bit) quantization
+- Incremental feeding: PCM is fed per-video-frame, output accumulates in a growable buffer
+
+**Decoder (`src/glif.c`):**
+- Decompresses BLIP v2 data with `mz_uncompress`
+- Unpacks 4-bit nibbles to individual bytes if needed
+- Backwards compatible: old decoders never see the BLIP section (it follows video frames, and they stop after reading `header.frames` frames)
+- Legacy BLIP v1 sections are detected and skipped gracefully
+
+**Web playback:**
+- Crushed PCM is read from WASM memory (`HEAPU8`) via exported pointer + length
+- Converted to float32 `AudioBuffer` at the original sample rate
+- Played via `AudioBufferSourceNode` synchronized to video position
+- Speed changes update `playbackRate` on the source node
+- Toggle with A key or speaker button (muted by default)
+
+**CLI flags:**
+- `--audio` — enable crushed PCM encoding (requires `--output-glif`)
+- `--audio-pcm <path>` — path to raw PCM input (s16le, mono, 44100 Hz)
+- `--audio-rate <hz>` — output sample rate (default: 8000)
+- `--audio-depth <bits>` — output bit depth, 4 or 8 (default: 8)
+
+**File size overhead:** negligible — 2.5 minutes of 8kHz 8-bit audio compresses to ~1MB with deflate.
 
 ### HDR Contrast Enhancement ✅
 

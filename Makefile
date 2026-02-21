@@ -34,14 +34,14 @@ DEBUG_LDFLAGS = -lm -fsanitize=address,undefined
 
 SRC = src/main.c src/image.c src/sampling.c src/grid.c src/font.c \
       src/contrast.c src/match.c src/output.c src/temporal.c src/compress.c \
-      src/glif.c vendor/miniz.c
+      src/glif.c src/blip.c vendor/miniz.c
 OBJ = $(SRC:.c=.o)
 BIN = glif
 
 # Library objects (everything except main.o)
 LIB_OBJ = src/image.o src/sampling.o src/grid.o src/font.o \
            src/contrast.o src/match.o src/output.o src/temporal.o src/compress.o \
-           src/glif.o vendor/miniz.o
+           src/glif.o src/blip.o vendor/miniz.o
 
 # Linux-only: v4l2 output
 UNAME := $(shell uname)
@@ -53,7 +53,7 @@ endif
 TESTS = tests/test_vec6 tests/test_sampling tests/test_image \
         tests/test_grid tests/test_contrast tests/test_match \
         tests/test_font tests/test_output tests/test_temporal \
-        tests/test_compress tests/test_glif
+        tests/test_compress tests/test_glif tests/test_blip
 
 all: $(BIN)
 
@@ -94,8 +94,8 @@ tests/test_match: tests/test_match.c src/sampling.o src/match.o src/font.o src/i
 tests/test_font: tests/test_font.c src/font.o src/sampling.o src/image.o
 	$(CC) $(TCFLAGS) -o $@ tests/test_font.c src/font.o src/sampling.o src/image.o $(LDFLAGS)
 
-tests/test_output: tests/test_output.c src/output.o src/compress.o src/glif.o src/font.o src/image.o src/sampling.o src/grid.o src/contrast.o src/match.o vendor/miniz.o
-	$(CC) $(TCFLAGS) -o $@ tests/test_output.c src/output.o src/compress.o src/glif.o src/font.o src/image.o src/sampling.o src/grid.o src/contrast.o src/match.o vendor/miniz.o $(LDFLAGS)
+tests/test_output: tests/test_output.c src/output.o src/compress.o src/glif.o src/blip.o src/font.o src/image.o src/sampling.o src/grid.o src/contrast.o src/match.o vendor/miniz.o
+	$(CC) $(TCFLAGS) -o $@ tests/test_output.c src/output.o src/compress.o src/glif.o src/blip.o src/font.o src/image.o src/sampling.o src/grid.o src/contrast.o src/match.o vendor/miniz.o $(LDFLAGS)
 
 tests/test_temporal: tests/test_temporal.c src/temporal.o src/image.o src/sampling.o src/grid.o src/contrast.o src/match.o src/font.o
 	$(CC) $(TCFLAGS) -o $@ tests/test_temporal.c src/temporal.o src/image.o src/sampling.o src/grid.o src/contrast.o src/match.o src/font.o $(LDFLAGS)
@@ -103,8 +103,11 @@ tests/test_temporal: tests/test_temporal.c src/temporal.o src/image.o src/sampli
 tests/test_compress: tests/test_compress.c src/compress.o vendor/miniz.o
 	$(CC) $(TCFLAGS) -o $@ tests/test_compress.c src/compress.o vendor/miniz.o $(LDFLAGS)
 
-tests/test_glif: tests/test_glif.c src/glif.o src/compress.o src/output.o src/grid.o src/image.o src/sampling.o src/font.o src/contrast.o src/match.o vendor/miniz.o
-	$(CC) $(TCFLAGS) -o $@ tests/test_glif.c src/glif.o src/compress.o src/output.o src/grid.o src/image.o src/sampling.o src/font.o src/contrast.o src/match.o vendor/miniz.o $(LDFLAGS)
+tests/test_glif: tests/test_glif.c src/glif.o src/compress.o src/output.o src/blip.o src/grid.o src/image.o src/sampling.o src/font.o src/contrast.o src/match.o vendor/miniz.o
+	$(CC) $(TCFLAGS) -o $@ tests/test_glif.c src/glif.o src/compress.o src/output.o src/blip.o src/grid.o src/image.o src/sampling.o src/font.o src/contrast.o src/match.o vendor/miniz.o $(LDFLAGS)
+
+tests/test_blip: tests/test_blip.c src/blip.o src/glif.o src/compress.o src/output.o src/grid.o src/image.o src/sampling.o src/font.o src/contrast.o src/match.o vendor/miniz.o
+	$(CC) $(TCFLAGS) -o $@ tests/test_blip.c src/blip.o src/glif.o src/compress.o src/output.o src/grid.o src/image.o src/sampling.o src/font.o src/contrast.o src/match.o vendor/miniz.o $(LDFLAGS)
 
 test: $(LIB_OBJ) $(TESTS)
 	@echo "=== Running tests ==="
@@ -194,7 +197,7 @@ wasm-ext: $(WASM_EXT_SRC)
 	  -o extension/wasm/glif-ext.js $(WASM_EXT_SRC) -lm
 
 # WASM player for .glif playback (minimal deps, no pipeline)
-WASM_PLAYER_SRC = src/glif.c src/compress.c vendor/miniz.c src/platform/wasm/player.c
+WASM_PLAYER_SRC = src/glif.c src/compress.c src/blip.c vendor/miniz.c src/platform/wasm/player.c
 
 WASM_PLAYER_EXPORTS = '_player_init','_player_load','_player_decode_frame', \
                       '_player_render','_player_resize','_player_free', \
@@ -202,7 +205,11 @@ WASM_PLAYER_EXPORTS = '_player_init','_player_load','_player_decode_frame', \
                       '_player_get_frames','_player_get_fps', \
                       '_player_get_cols','_player_get_rows', \
                       '_player_get_cell_w','_player_get_cell_h', \
-                      '_player_get_flags','_malloc','_free'
+                      '_player_get_flags', \
+                      '_player_has_audio','_player_get_audio_pcm_ptr', \
+                      '_player_get_audio_pcm_len','_player_get_audio_bit_depth', \
+                      '_player_get_audio_sample_rate','_player_has_orig_audio', \
+                      '_malloc','_free'
 
 wasm-player: $(WASM_PLAYER_SRC)
 	@mkdir -p web

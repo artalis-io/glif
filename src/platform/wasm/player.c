@@ -228,6 +228,48 @@ int player_get_flags(void) {
     return player.reader.header.flags;
 }
 
+/* ── Audio accessors (crushed PCM) ── */
+
+EMSCRIPTEN_KEEPALIVE
+int player_has_audio(void) {
+    if (!player.loaded) return 0;
+    return glif_reader_has_audio(&player.reader);
+}
+
+EMSCRIPTEN_KEEPALIVE
+int player_get_audio_pcm_ptr(void) {
+    if (!player.loaded) return 0;
+    uint32_t num;
+    const uint8_t *pcm = glif_reader_audio_pcm(&player.reader, &num);
+    return (int)(uintptr_t)pcm;
+}
+
+EMSCRIPTEN_KEEPALIVE
+int player_get_audio_pcm_len(void) {
+    if (!player.loaded) return 0;
+    uint32_t num = 0;
+    glif_reader_audio_pcm(&player.reader, &num);
+    return (int)num;
+}
+
+EMSCRIPTEN_KEEPALIVE
+int player_get_audio_sample_rate(void) {
+    if (!player.loaded) return 0;
+    return (int)glif_reader_audio_sample_rate(&player.reader);
+}
+
+EMSCRIPTEN_KEEPALIVE
+int player_get_audio_bit_depth(void) {
+    if (!player.loaded) return 0;
+    return (int)glif_reader_audio_bit_depth(&player.reader);
+}
+
+EMSCRIPTEN_KEEPALIVE
+int player_has_orig_audio(void) {
+    if (!player.loaded) return 0;
+    return glif_reader_has_orig_audio(&player.reader);
+}
+
 EMSCRIPTEN_KEEPALIVE
 void player_free(void) {
     if (player.loaded) {

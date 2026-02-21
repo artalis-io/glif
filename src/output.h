@@ -58,9 +58,13 @@ void glif_ppm_pipe_free(GlifPpmPipe *pp);
 #define GLIF_HEADER_SIZE 24
 #define GLIF_FLAG_DARK       0x01
 #define GLIF_FLAG_COMPRESSED 0x02
+#define GLIF_FLAG_AUDIO      0x04
+
+typedef struct BlipEncoder BlipEncoder;
 
 typedef struct {
     FILE *file;
+    uint8_t flags;    /* header flags (for audio bit patching) */
     uint32_t frames;
     int cells;        /* cols × rows */
     int cols, rows;   /* grid dimensions (for filtered codecs) */
@@ -77,6 +81,12 @@ typedef struct {
     int keyframe_interval; /* 0 = auto, >0 = force keyframe every N frames */
     int quant_shift;   /* bits to drop from RGB (0=off, 1-4) */
     int threshold;     /* max per-channel diff to snap (0=off) */
+    /* audio (BLIP section — crushed PCM) */
+    BlipEncoder *blip;            /* NULL when audio disabled */
+    /* original audio (ORIG section) */
+    uint8_t *orig_audio;          /* original audio bitstream, NULL if not kept */
+    size_t orig_audio_len;
+    uint32_t orig_codec;          /* e.g. 'OPUS' */
 } GlifWriter;
 
 int  glif_writer_init(GlifWriter *gw, const char *path,
@@ -90,5 +100,12 @@ void glif_writer_set_quant(GlifWriter *gw, int bits);
 void glif_writer_set_threshold(GlifWriter *gw, int thresh);
 void glif_writer_frame(GlifWriter *gw, const GlifGrid *grid);
 int  glif_writer_finish(GlifWriter *gw);
+
+/* Audio support (crushed PCM) */
+int  glif_writer_enable_audio(GlifWriter *gw, int src_rate, int channels,
+                              int dst_rate, int bit_depth);
+void glif_writer_keep_original_audio(GlifWriter *gw, const uint8_t *opus_data,
+                                     size_t len);
+void glif_writer_audio_samples(GlifWriter *gw, const int16_t *pcm, int samples);
 
 #endif

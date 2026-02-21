@@ -1,5 +1,7 @@
 #include "output.h"
+#include "blip.h"
 #include "compress.h"
+#include "miniz.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -405,10 +407,15 @@ int glif_writer_init_v2(GlifWriter *gw, const char *path,
     gw->keyframe_interval = 0;
     gw->quant_shift = 0;
     gw->threshold = 0;
+    gw->blip = NULL;
+    gw->orig_audio = NULL;
+    gw->orig_audio_len = 0;
+    gw->orig_codec = 0;
 
     uint8_t version = GLIF_VERSION;
-    uint8_t flags = dark_mode ? GLIF_FLAG_DARK : 0;
-    if (compressed) flags |= GLIF_FLAG_COMPRESSED;
+    gw->flags = dark_mode ? GLIF_FLAG_DARK : 0;
+    if (compressed) gw->flags |= GLIF_FLAG_COMPRESSED;
+    uint8_t flags = gw->flags;
 
     /* Write header (24 bytes) */
     int e = 0;
@@ -645,8 +652,99 @@ void glif_writer_frame(GlifWriter *gw, const GlifGrid *grid) {
     gw->frames++;
 }
 
+/* Write BLIP v2 section — crushed PCM, deflate compressed.
+ * Format (16-byte header + compressed data):
+ *   0:  "BLIP"       (4 bytes)
+ *   4:  version=2    (uint8)
+ *   5:  bit_depth    (uint8)
+ *   6:  sample_rate  (uint16 LE)
+ *   8:  num_samples  (uint32 LE)
+ *   12: data_size    (uint32 LE, compressed)
+ *   16: [compressed PCM data] */
+static void write_blip_section(GlifWriter *gw) {
+    uint32_t num_samples = blip_encoder_samples(gw->blip);
+    if (num_samples == 0) return;
+
+    const uint8_t *pcm_data = blip_encoder_data(gw->blip);
+
+    /* Prepare raw data (pack 4-bit if needed) */
+    const uint8_t *raw = pcm_data;
+    uint32_t raw_size = num_samples;
+    uint8_t *packed = NULL;
+
+    if (gw->blip->bit_depth == 4) {
+        raw_size = (num_samples + 1) / 2;
+        packed = malloc(raw_size);
+        if (!packed) { gw->err = 1; return; }
+        for (uint32_t i = 0; i < num_samples; i += 2) {
+            uint8_t hi = pcm_data[i] & 0x0F;
+            uint8_t lo = (i + 1 < num_samples) ? (pcm_data[i + 1] & 0x0F) : 0;
+            packed[i / 2] = (uint8_t)((hi << 4) | lo);
+        }
+        raw = packed;
+    }
+
+    /* Deflate compress */
+    mz_ulong comp_bound = mz_compressBound((mz_ulong)raw_size);
+    uint8_t *comp = malloc(comp_bound);
+    if (!comp) { free(packed); gw->err = 1; return; }
+    mz_ulong comp_len = comp_bound;
+    int mz_ret = mz_compress(comp, &comp_len, raw, (mz_ulong)raw_size);
+    free(packed);
+    if (mz_ret != MZ_OK) { free(comp); gw->err = 1; return; }
+
+    /* Write 16-byte BLIP header + compressed data */
+    int e = 0;
+    e |= (fwrite(BLIP_MAGIC, 1, 4, gw->file) != 4) ? -1 : 0;
+    e |= write_u8(gw->file, BLIP_VERSION);
+    e |= write_u8(gw->file, (uint8_t)gw->blip->bit_depth);
+    e |= write_u16(gw->file, (uint16_t)gw->blip->dst_rate);
+    e |= write_u32(gw->file, num_samples);
+    e |= write_u32(gw->file, (uint32_t)comp_len);
+    if (!e) {
+        if (fwrite(comp, 1, (size_t)comp_len, gw->file) != (size_t)comp_len)
+            e = -1;
+    }
+    free(comp);
+    if (e) gw->err = 1;
+}
+
+static void write_orig_section(GlifWriter *gw) {
+    if (!gw->orig_audio || gw->orig_audio_len == 0) return;
+
+    /* ORIG section header (12 bytes) */
+    int e = 0;
+    e |= (fwrite("ORIG", 1, 4, gw->file) != 4) ? -1 : 0;
+    e |= write_u32(gw->file, gw->orig_codec);
+    e |= write_u32(gw->file, (uint32_t)gw->orig_audio_len);
+    if (e) { gw->err = 1; return; }
+
+    /* Raw bitstream */
+    if (fwrite(gw->orig_audio, 1, gw->orig_audio_len, gw->file) != gw->orig_audio_len) {
+        gw->err = 1;
+    }
+}
+
 int glif_writer_finish(GlifWriter *gw) {
     if (!gw->file) return -1;
+
+    /* Write BLIP audio section after video frames */
+    if (gw->blip && blip_encoder_samples(gw->blip) > 0) {
+        write_blip_section(gw);
+    }
+
+    /* Write ORIG section if original audio is kept */
+    if (gw->orig_audio && gw->orig_audio_len > 0) {
+        write_orig_section(gw);
+    }
+
+    /* Seek back to flags field (offset 5) to set audio flag if needed */
+    if (gw->blip && blip_encoder_samples(gw->blip) > 0) {
+        gw->flags |= GLIF_FLAG_AUDIO;
+        if (fseek(gw->file, 5, SEEK_SET) == 0) {
+            if (write_u8(gw->file, gw->flags) != 0) gw->err = 1;
+        }
+    }
 
     /* Seek back to frames field (offset 18) and write actual count */
     if (fseek(gw->file, 18, SEEK_SET) == 0) {
@@ -663,5 +761,46 @@ int glif_writer_finish(GlifWriter *gw) {
     free(gw->enc_buf);  gw->enc_buf = NULL;
     free(gw->enc_buf2); gw->enc_buf2 = NULL;
 
+    /* Free audio resources */
+    if (gw->blip) {
+        blip_encoder_free(gw->blip);
+        free(gw->blip);
+        gw->blip = NULL;
+    }
+    free(gw->orig_audio);   gw->orig_audio = NULL;
+
     return gw->err ? -1 : 0;
+}
+
+/* ── Audio support (crushed PCM) ── */
+
+int glif_writer_enable_audio(GlifWriter *gw, int src_rate, int channels,
+                             int dst_rate, int bit_depth) {
+    if (!gw || gw->blip) return -1;
+
+    gw->blip = calloc(1, sizeof(BlipEncoder));
+    if (!gw->blip) return -1;
+
+    if (blip_encoder_init(gw->blip, src_rate, channels, dst_rate, bit_depth) != 0) {
+        free(gw->blip);
+        gw->blip = NULL;
+        return -1;
+    }
+
+    return 0;
+}
+
+void glif_writer_keep_original_audio(GlifWriter *gw, const uint8_t *opus_data,
+                                     size_t len) {
+    if (!gw || !opus_data || len == 0) return;
+    gw->orig_audio = malloc(len);
+    if (!gw->orig_audio) return;
+    memcpy(gw->orig_audio, opus_data, len);
+    gw->orig_audio_len = len;
+    gw->orig_codec = 0x5355504F; /* "OPUS" in LE */
+}
+
+void glif_writer_audio_samples(GlifWriter *gw, const int16_t *pcm, int samples) {
+    if (!gw || !gw->blip || !pcm || samples <= 0) return;
+    blip_encoder_feed(gw->blip, pcm, samples);
 }
