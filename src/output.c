@@ -1,5 +1,7 @@
 #include "output.h"
+#include "blip.h"
 #include "compress.h"
+#include "miniz.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -391,6 +393,8 @@ int glif_writer_init_v2(GlifWriter *gw, const char *path,
     }
     gw->frames = 0;
     gw->cells = cols * rows;
+    gw->cols = cols;
+    gw->rows = rows;
     gw->err = 0;
     gw->compressed = compressed;
     gw->prev = NULL;
@@ -398,10 +402,20 @@ int glif_writer_init_v2(GlifWriter *gw, const char *path,
     gw->work = NULL;
     gw->enc_buf = NULL;
     gw->enc_cap = 0;
+    gw->enc_buf2 = NULL;
+    gw->enc_cap2 = 0;
+    gw->keyframe_interval = 0;
+    gw->quant_shift = 0;
+    gw->threshold = 0;
+    gw->blip = NULL;
+    gw->orig_audio = NULL;
+    gw->orig_audio_len = 0;
+    gw->orig_codec = 0;
 
-    uint8_t version = compressed ? GLIF_VERSION_2 : GLIF_VERSION_1;
-    uint8_t flags = dark_mode ? GLIF_FLAG_DARK : 0;
-    if (compressed) flags |= GLIF_FLAG_COMPRESSED;
+    uint8_t version = GLIF_VERSION;
+    gw->flags = dark_mode ? GLIF_FLAG_DARK : 0;
+    if (compressed) gw->flags |= GLIF_FLAG_COMPRESSED;
+    uint8_t flags = gw->flags;
 
     /* Write header (24 bytes) */
     int e = 0;
@@ -414,7 +428,8 @@ int glif_writer_init_v2(GlifWriter *gw, const char *path,
     e |= write_u16(gw->file, (uint16_t)cell_h);
     e |= write_f32(gw->file, fps);
     e |= write_u32(gw->file, 0);                  /* frames (placeholder) */
-    e |= write_u16(gw->file, 0);                  /* reserved */
+    e |= write_u8(gw->file, 0);    /* reserved */
+    e |= write_u8(gw->file, 0);
     if (e) { gw->err = 1; }
 
     /* Allocate compression buffers */
@@ -423,15 +438,24 @@ int glif_writer_init_v2(GlifWriter *gw, const char *path,
         gw->prev = calloc(buf_size, 1);
         gw->cur = malloc(buf_size);
         gw->work = malloc(buf_size);
-        /* Worst case is the larger of RLE bound and delta bound */
-        size_t rle_b = glif_compress_rle_bound(gw->cells);
-        size_t delta_b = glif_compress_delta_bound(gw->cells);
-        gw->enc_cap = rle_b > delta_b ? rle_b : delta_b;
+        /* Worst case across all deflate codecs */
+        size_t deflate_b = glif_compress_deflate_bound(gw->cells);
+        size_t filt_b = glif_compress_filtered_deflate_bound(cols, rows);
+        size_t pal_b = glif_compress_palette_deflate_bound(gw->cells);
+        size_t pld_b = glif_compress_planar_deflate_bound(gw->cells);
+        gw->enc_cap = deflate_b;
+        if (filt_b > gw->enc_cap) gw->enc_cap = filt_b;
+        if (pal_b > gw->enc_cap) gw->enc_cap = pal_b;
+        if (pld_b > gw->enc_cap) gw->enc_cap = pld_b;
         gw->enc_buf = malloc(gw->enc_cap);
-        if (!gw->prev || !gw->cur || !gw->work || !gw->enc_buf) {
+        /* Second buffer so we can try multiple codecs without re-encoding */
+        gw->enc_cap2 = gw->enc_cap;
+        gw->enc_buf2 = malloc(gw->enc_cap2);
+        if (!gw->prev || !gw->cur || !gw->work || !gw->enc_buf || !gw->enc_buf2) {
             fprintf(stderr, "error: failed to allocate compression buffers\n");
-            free(gw->prev); free(gw->cur); free(gw->work); free(gw->enc_buf);
-            gw->prev = gw->cur = gw->work = gw->enc_buf = NULL;
+            free(gw->prev); free(gw->cur); free(gw->work);
+            free(gw->enc_buf); free(gw->enc_buf2);
+            gw->prev = gw->cur = gw->work = gw->enc_buf = gw->enc_buf2 = NULL;
             fclose(gw->file);
             gw->file = NULL;
             return -1;
@@ -439,6 +463,18 @@ int glif_writer_init_v2(GlifWriter *gw, const char *path,
     }
 
     return 0;
+}
+
+void glif_writer_set_keyframe_interval(GlifWriter *gw, int interval) {
+    gw->keyframe_interval = interval > 0 ? interval : 0;
+}
+
+void glif_writer_set_quant(GlifWriter *gw, int bits) {
+    gw->quant_shift = (bits >= 1 && bits <= 4) ? bits : 0;
+}
+
+void glif_writer_set_threshold(GlifWriter *gw, int thresh) {
+    gw->threshold = (thresh >= 0 && thresh <= 255) ? thresh : 0;
 }
 
 void glif_writer_frame(GlifWriter *gw, const GlifGrid *grid) {
@@ -456,7 +492,7 @@ void glif_writer_frame(GlifWriter *gw, const GlifGrid *grid) {
         return;
     }
 
-    /* v2 path: flatten grid to cur, try all encodings, pick smallest */
+    /* Flatten grid to cur, try all encodings, pick smallest */
     for (int i = 0; i < total; i++) {
         const GlifGridCell *cell = &grid->cells[i];
         gw->cur[i * 4]     = (uint8_t)cell->ch;
@@ -465,50 +501,140 @@ void glif_writer_frame(GlifWriter *gw, const GlifGrid *grid) {
         gw->cur[i * 4 + 3] = cell->b;
     }
 
-    int raw_size = total * 4;
-    int best_size = raw_size;
-    uint8_t best_type = GLIF_FRAME_RAW;
-    const uint8_t *best_data = gw->cur;
-
-    /* Try RLE */
-    int rle_size = glif_compress_rle_encode(gw->cur, total, gw->enc_buf, gw->enc_cap);
-    if (rle_size > 0 && rle_size < best_size) {
-        best_size = rle_size;
-        best_type = GLIF_FRAME_RLE;
-    }
-
-    /* Try delta variants only after first frame */
-    int delta_size = -1, delta_rle_size = -1;
-    if (gw->frames > 0 && total <= 65535) {
-        delta_size = glif_compress_delta_encode(gw->cur, gw->prev, total,
-                                                gw->enc_buf, gw->enc_cap);
-        if (delta_size > 0 && delta_size < best_size) {
-            best_size = delta_size;
-            best_type = GLIF_FRAME_DELTA;
-        }
-
-        delta_rle_size = glif_compress_delta_rle_encode(gw->cur, gw->prev, total,
-                                                         gw->work, gw->enc_buf,
-                                                         gw->enc_cap);
-        if (delta_rle_size > 0 && delta_rle_size < best_size) {
-            best_size = delta_rle_size;
-            best_type = GLIF_FRAME_DELTA_RLE;
+    /* Quantize RGB channels */
+    if (gw->quant_shift > 0) {
+        uint8_t mask = (uint8_t)(0xFF << gw->quant_shift);
+        for (int i = 0; i < total; i++) {
+            gw->cur[i*4+1] &= mask;
+            gw->cur[i*4+2] &= mask;
+            gw->cur[i*4+3] &= mask;
         }
     }
 
-    /* Re-encode the winner into enc_buf (if it wasn't the last one tried) */
-    if (best_type == GLIF_FRAME_RAW) {
-        best_data = gw->cur;
-    } else if (best_type == GLIF_FRAME_RLE) {
-        glif_compress_rle_encode(gw->cur, total, gw->enc_buf, gw->enc_cap);
+    /* Temporal thresholding — snap near-identical cells to prev */
+    if (gw->threshold > 0 && gw->frames > 0) {
+        int t = gw->threshold;
+        for (int i = 0; i < total; i++) {
+            int o = i * 4;
+            if (gw->cur[o] == gw->prev[o] &&
+                abs(gw->cur[o+1] - gw->prev[o+1]) <= t &&
+                abs(gw->cur[o+2] - gw->prev[o+2]) <= t &&
+                abs(gw->cur[o+3] - gw->prev[o+3]) <= t) {
+                memcpy(gw->cur + o, gw->prev + o, 4);
+            }
+        }
+    }
+
+    int best_size = 0x7FFFFFFF;
+    uint8_t best_type = GLIF_FRAME_DEFLATE;
+    const uint8_t *best_data = gw->enc_buf;
+
+    /* Determine if this frame must be a keyframe */
+    int force_keyframe = (gw->keyframe_interval > 0 &&
+                          (gw->frames == 0 ||
+                           (int)gw->frames % gw->keyframe_interval == 0));
+    int allow_delta = (gw->frames > 0 && !force_keyframe);
+
+    /* --- Keyframe codecs --- */
+
+    /* Filtered deflate (usually best keyframe codec) */
+    int fd_size = glif_compress_filtered_deflate_encode(gw->cur, gw->cols, gw->rows,
+                                                         gw->enc_buf, gw->enc_cap);
+    if (fd_size > 0 && fd_size < best_size) {
+        best_size = fd_size;
+        best_type = GLIF_FRAME_FILTERED_DEFLATE;
+    }
+
+    /* Plain deflate keyframe */
+    int deflate_size = glif_compress_deflate_encode(gw->cur, total,
+                                                    gw->enc_buf2, gw->enc_cap2);
+    if (deflate_size > 0 && deflate_size < best_size) {
+        best_size = deflate_size;
+        best_type = GLIF_FRAME_DEFLATE;
+    }
+
+    /* Palette deflate (returns -1 if >256 unique colors) */
+    int pal_size = glif_compress_palette_deflate_encode(gw->cur, total,
+                                                         gw->enc_buf, gw->enc_cap);
+    if (pal_size > 0 && pal_size < best_size) {
+        best_size = pal_size;
+        best_type = GLIF_FRAME_PALETTE_DEFLATE;
+    }
+
+    /* Per-plane separate deflate */
+    int pld_size = glif_compress_planar_deflate_encode(gw->cur, total,
+                                                        gw->enc_buf2, gw->enc_cap2);
+    if (pld_size > 0 && pld_size < best_size) {
+        best_size = pld_size;
+        best_type = GLIF_FRAME_PLANAR_DEFLATE;
+    }
+
+    /* --- Delta codecs (only after first frame, not on forced keyframes) --- */
+    if (allow_delta) {
+        /* Delta + filtered deflate (usually best P-frame codec) */
+        int dfd_size = glif_compress_delta_filtered_deflate_encode(
+            gw->cur, gw->prev, gw->cols, gw->rows, gw->enc_buf, gw->enc_cap);
+        if (dfd_size > 0 && dfd_size < best_size) {
+            best_size = dfd_size;
+            best_type = GLIF_FRAME_DELTA_FILTERED_DEFLATE;
+        }
+
+        /* Delta + deflate */
+        int dd_size = glif_compress_delta_deflate_encode(gw->cur, gw->prev, total,
+                                                          gw->work, gw->enc_buf2,
+                                                          gw->enc_cap2);
+        if (dd_size > 0 && dd_size < best_size) {
+            best_size = dd_size;
+            best_type = GLIF_FRAME_DELTA_DEFLATE;
+        }
+
+        /* Delta + per-plane separate deflate */
+        int dpd_size = glif_compress_delta_planar_deflate_encode(gw->cur, gw->prev, total,
+                                                                  gw->enc_buf, gw->enc_cap);
+        if (dpd_size > 0 && dpd_size < best_size) {
+            best_size = dpd_size;
+            best_type = GLIF_FRAME_DELTA_PLANAR_DEFLATE;
+        }
+    }
+
+    /* Re-encode the winner into enc_buf (the selection loop may have
+     * overwritten the buffer that held the winning encoding) */
+    switch (best_type) {
+    case GLIF_FRAME_FILTERED_DEFLATE:
+        glif_compress_filtered_deflate_encode(gw->cur, gw->cols, gw->rows,
+                                              gw->enc_buf, gw->enc_cap);
         best_data = gw->enc_buf;
-    } else if (best_type == GLIF_FRAME_DELTA) {
-        glif_compress_delta_encode(gw->cur, gw->prev, total, gw->enc_buf, gw->enc_cap);
+        break;
+    case GLIF_FRAME_DEFLATE:
+        glif_compress_deflate_encode(gw->cur, total, gw->enc_buf, gw->enc_cap);
         best_data = gw->enc_buf;
-    } else {
-        glif_compress_delta_rle_encode(gw->cur, gw->prev, total,
-                                       gw->work, gw->enc_buf, gw->enc_cap);
+        break;
+    case GLIF_FRAME_PALETTE_DEFLATE:
+        glif_compress_palette_deflate_encode(gw->cur, total, gw->enc_buf, gw->enc_cap);
         best_data = gw->enc_buf;
+        break;
+    case GLIF_FRAME_PLANAR_DEFLATE:
+        glif_compress_planar_deflate_encode(gw->cur, total, gw->enc_buf, gw->enc_cap);
+        best_data = gw->enc_buf;
+        break;
+    case GLIF_FRAME_DELTA_FILTERED_DEFLATE:
+        glif_compress_delta_filtered_deflate_encode(gw->cur, gw->prev, gw->cols, gw->rows,
+                                                    gw->enc_buf, gw->enc_cap);
+        best_data = gw->enc_buf;
+        break;
+    case GLIF_FRAME_DELTA_DEFLATE:
+        glif_compress_delta_deflate_encode(gw->cur, gw->prev, total,
+                                           gw->work, gw->enc_buf, gw->enc_cap);
+        best_data = gw->enc_buf;
+        break;
+    case GLIF_FRAME_DELTA_PLANAR_DEFLATE:
+        glif_compress_delta_planar_deflate_encode(gw->cur, gw->prev, total,
+                                                  gw->enc_buf, gw->enc_cap);
+        best_data = gw->enc_buf;
+        break;
+    default:
+        best_data = gw->enc_buf;
+        break;
     }
 
     /* Write 5-byte frame envelope: [type(u8), payload_size(u32 LE)] */
@@ -526,8 +652,99 @@ void glif_writer_frame(GlifWriter *gw, const GlifGrid *grid) {
     gw->frames++;
 }
 
+/* Write BLIP v2 section — crushed PCM, deflate compressed.
+ * Format (16-byte header + compressed data):
+ *   0:  "BLIP"       (4 bytes)
+ *   4:  version=2    (uint8)
+ *   5:  bit_depth    (uint8)
+ *   6:  sample_rate  (uint16 LE)
+ *   8:  num_samples  (uint32 LE)
+ *   12: data_size    (uint32 LE, compressed)
+ *   16: [compressed PCM data] */
+static void write_blip_section(GlifWriter *gw) {
+    uint32_t num_samples = blip_encoder_samples(gw->blip);
+    if (num_samples == 0) return;
+
+    const uint8_t *pcm_data = blip_encoder_data(gw->blip);
+
+    /* Prepare raw data (pack 4-bit if needed) */
+    const uint8_t *raw = pcm_data;
+    uint32_t raw_size = num_samples;
+    uint8_t *packed = NULL;
+
+    if (gw->blip->bit_depth == 4) {
+        raw_size = (num_samples + 1) / 2;
+        packed = malloc(raw_size);
+        if (!packed) { gw->err = 1; return; }
+        for (uint32_t i = 0; i < num_samples; i += 2) {
+            uint8_t hi = pcm_data[i] & 0x0F;
+            uint8_t lo = (i + 1 < num_samples) ? (pcm_data[i + 1] & 0x0F) : 0;
+            packed[i / 2] = (uint8_t)((hi << 4) | lo);
+        }
+        raw = packed;
+    }
+
+    /* Deflate compress */
+    mz_ulong comp_bound = mz_compressBound((mz_ulong)raw_size);
+    uint8_t *comp = malloc(comp_bound);
+    if (!comp) { free(packed); gw->err = 1; return; }
+    mz_ulong comp_len = comp_bound;
+    int mz_ret = mz_compress(comp, &comp_len, raw, (mz_ulong)raw_size);
+    free(packed);
+    if (mz_ret != MZ_OK) { free(comp); gw->err = 1; return; }
+
+    /* Write 16-byte BLIP header + compressed data */
+    int e = 0;
+    e |= (fwrite(BLIP_MAGIC, 1, 4, gw->file) != 4) ? -1 : 0;
+    e |= write_u8(gw->file, BLIP_VERSION);
+    e |= write_u8(gw->file, (uint8_t)gw->blip->bit_depth);
+    e |= write_u16(gw->file, (uint16_t)gw->blip->dst_rate);
+    e |= write_u32(gw->file, num_samples);
+    e |= write_u32(gw->file, (uint32_t)comp_len);
+    if (!e) {
+        if (fwrite(comp, 1, (size_t)comp_len, gw->file) != (size_t)comp_len)
+            e = -1;
+    }
+    free(comp);
+    if (e) gw->err = 1;
+}
+
+static void write_orig_section(GlifWriter *gw) {
+    if (!gw->orig_audio || gw->orig_audio_len == 0) return;
+
+    /* ORIG section header (12 bytes) */
+    int e = 0;
+    e |= (fwrite("ORIG", 1, 4, gw->file) != 4) ? -1 : 0;
+    e |= write_u32(gw->file, gw->orig_codec);
+    e |= write_u32(gw->file, (uint32_t)gw->orig_audio_len);
+    if (e) { gw->err = 1; return; }
+
+    /* Raw bitstream */
+    if (fwrite(gw->orig_audio, 1, gw->orig_audio_len, gw->file) != gw->orig_audio_len) {
+        gw->err = 1;
+    }
+}
+
 int glif_writer_finish(GlifWriter *gw) {
     if (!gw->file) return -1;
+
+    /* Write BLIP audio section after video frames */
+    if (gw->blip && blip_encoder_samples(gw->blip) > 0) {
+        write_blip_section(gw);
+    }
+
+    /* Write ORIG section if original audio is kept */
+    if (gw->orig_audio && gw->orig_audio_len > 0) {
+        write_orig_section(gw);
+    }
+
+    /* Seek back to flags field (offset 5) to set audio flag if needed */
+    if (gw->blip && blip_encoder_samples(gw->blip) > 0) {
+        gw->flags |= GLIF_FLAG_AUDIO;
+        if (fseek(gw->file, 5, SEEK_SET) == 0) {
+            if (write_u8(gw->file, gw->flags) != 0) gw->err = 1;
+        }
+    }
 
     /* Seek back to frames field (offset 18) and write actual count */
     if (fseek(gw->file, 18, SEEK_SET) == 0) {
@@ -538,10 +755,52 @@ int glif_writer_finish(GlifWriter *gw) {
     gw->file = NULL;
 
     /* Free compression buffers */
-    free(gw->prev);  gw->prev = NULL;
-    free(gw->cur);   gw->cur = NULL;
-    free(gw->work);  gw->work = NULL;
-    free(gw->enc_buf); gw->enc_buf = NULL;
+    free(gw->prev);     gw->prev = NULL;
+    free(gw->cur);      gw->cur = NULL;
+    free(gw->work);     gw->work = NULL;
+    free(gw->enc_buf);  gw->enc_buf = NULL;
+    free(gw->enc_buf2); gw->enc_buf2 = NULL;
+
+    /* Free audio resources */
+    if (gw->blip) {
+        blip_encoder_free(gw->blip);
+        free(gw->blip);
+        gw->blip = NULL;
+    }
+    free(gw->orig_audio);   gw->orig_audio = NULL;
 
     return gw->err ? -1 : 0;
+}
+
+/* ── Audio support (crushed PCM) ── */
+
+int glif_writer_enable_audio(GlifWriter *gw, int src_rate, int channels,
+                             int dst_rate, int bit_depth) {
+    if (!gw || gw->blip) return -1;
+
+    gw->blip = calloc(1, sizeof(BlipEncoder));
+    if (!gw->blip) return -1;
+
+    if (blip_encoder_init(gw->blip, src_rate, channels, dst_rate, bit_depth) != 0) {
+        free(gw->blip);
+        gw->blip = NULL;
+        return -1;
+    }
+
+    return 0;
+}
+
+void glif_writer_keep_original_audio(GlifWriter *gw, const uint8_t *opus_data,
+                                     size_t len) {
+    if (!gw || !opus_data || len == 0) return;
+    gw->orig_audio = malloc(len);
+    if (!gw->orig_audio) return;
+    memcpy(gw->orig_audio, opus_data, len);
+    gw->orig_audio_len = len;
+    gw->orig_codec = 0x5355504F; /* "OPUS" in LE */
+}
+
+void glif_writer_audio_samples(GlifWriter *gw, const int16_t *pcm, int samples) {
+    if (!gw || !gw->blip || !pcm || samples <= 0) return;
+    blip_encoder_feed(gw->blip, pcm, samples);
 }

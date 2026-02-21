@@ -33,12 +33,20 @@ int main(int argc, char **argv) {
            hdr->cell_w, hdr->cell_h, hdr->fps, hdr->frames);
 
     /* Count frame types */
-    int type_counts[4] = {0};
+    int type_counts[16] = {0};
     for (uint32_t i = 0; i < hdr->frames; i++) {
-        if (gr.index[i].type < 4) type_counts[gr.index[i].type]++;
+        if (gr.index[i].type < 16) type_counts[gr.index[i].type]++;
     }
-    printf("Frame types: RAW=%d, DELTA=%d, RLE=%d, DELTA_RLE=%d\n",
-           type_counts[0], type_counts[1], type_counts[2], type_counts[3]);
+    printf("Frame types:");
+    const char *type_names[] = {
+        "DEFLATE", "D_DEFLATE", "FILT_DEFL", "D_FILT_DEFL",
+        "PAL_DEFL", NULL, "PL_DEFL", "D_PL_DEFL"
+    };
+    for (int t = 0; t < 8; t++) {
+        if (type_counts[t] > 0 && type_names[t])
+            printf(" %s=%d", type_names[t], type_counts[t]);
+    }
+    printf("\n");
 
     /* Decode all frames sequentially, check for errors */
     int errors = 0;

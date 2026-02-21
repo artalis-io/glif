@@ -1,5 +1,6 @@
 #include "utest.h"
 #include "output.h"
+#include "glif.h"
 #include "font.h"
 #include "grid.h"
 #include "image.h"
@@ -755,7 +756,7 @@ UTEST(output, glif_writer_header) {
     fclose(f);
 
     ASSERT_EQ(memcmp(hdr, "GLIF", 4), 0);
-    ASSERT_EQ(hdr[4], GLIF_VERSION_1);
+    ASSERT_EQ(hdr[4], GLIF_VERSION);
     ASSERT_EQ(hdr[5], 0);  /* flags: no dark mode */
     ASSERT_EQ(read_u16(hdr + 6), 120);
     ASSERT_EQ(read_u16(hdr + 8), 40);
@@ -845,6 +846,203 @@ UTEST(output, glif_writer_frame_data_matches_grid) {
 
     remove(path);
     free(grid.cells);
+}
+
+/* ---- Lossy preprocessing roundtrip tests ---- */
+
+/* Helper: write .glif, read file into buffer */
+static uint8_t *read_file(const char *path, size_t *out_len) {
+    FILE *f = fopen(path, "rb");
+    if (!f) return NULL;
+    fseek(f, 0, SEEK_END);
+    long sz = ftell(f);
+    rewind(f);
+    uint8_t *buf = malloc((size_t)sz);
+    if (!buf) { fclose(f); return NULL; }
+    if (fread(buf, 1, (size_t)sz, f) != (size_t)sz) { free(buf); fclose(f); return NULL; }
+    fclose(f);
+    *out_len = (size_t)sz;
+    return buf;
+}
+
+UTEST(output, glif_writer_quant_roundtrip) {
+    const char *path = "/tmp/glif_test_quant.glif";
+    int cols = 4, rows = 3;
+    GlifGrid grid = make_test_grid(rows, cols, 10, 20, 'A');
+    /* Set varied RGB values */
+    for (int i = 0; i < cols * rows; i++) {
+        grid.cells[i].r = (uint8_t)(100 + i * 3);
+        grid.cells[i].g = (uint8_t)(50 + i * 5);
+        grid.cells[i].b = (uint8_t)(200 - i * 2);
+    }
+
+    GlifWriter gw;
+    ASSERT_EQ(glif_writer_init_v2(&gw, path, cols, rows, 10, 20, 30.0f, 0, 1), 0);
+    glif_writer_set_quant(&gw, 2);  /* drop 2 LSBs */
+    glif_writer_frame(&gw, &grid);
+    ASSERT_EQ(glif_writer_finish(&gw), 0);
+
+    /* Read back and decode */
+    size_t file_len;
+    uint8_t *file_data = read_file(path, &file_len);
+    ASSERT_TRUE(file_data != NULL);
+
+    GlifReader gr;
+    ASSERT_EQ(glif_reader_open(&gr, file_data, file_len), 0);
+    ASSERT_EQ(glif_reader_decode(&gr, 0), 0);
+    const uint8_t *decoded = glif_reader_frame_data(&gr);
+    ASSERT_TRUE(decoded != NULL);
+
+    /* Verify RGB values have 2 LSBs cleared (mask 0xFC) */
+    for (int i = 0; i < cols * rows; i++) {
+        uint8_t expected_r = grid.cells[i].r & 0xFC;
+        uint8_t expected_g = grid.cells[i].g & 0xFC;
+        uint8_t expected_b = grid.cells[i].b & 0xFC;
+        ASSERT_EQ(decoded[i*4+0], (uint8_t)grid.cells[i].ch);
+        ASSERT_EQ(decoded[i*4+1], expected_r);
+        ASSERT_EQ(decoded[i*4+2], expected_g);
+        ASSERT_EQ(decoded[i*4+3], expected_b);
+    }
+
+    glif_reader_close(&gr);
+    free(file_data);
+    remove(path);
+    free(grid.cells);
+}
+
+UTEST(output, glif_writer_threshold_roundtrip) {
+    const char *path = "/tmp/glif_test_threshold.glif";
+    int cols = 3, rows = 2;
+
+    /* Frame 1: base colors */
+    GlifGrid grid1 = make_test_grid(rows, cols, 10, 20, 'A');
+    for (int i = 0; i < cols * rows; i++) {
+        grid1.cells[i].r = 100;
+        grid1.cells[i].g = 150;
+        grid1.cells[i].b = 200;
+    }
+
+    /* Frame 2: some cells differ by <= threshold, some by more */
+    GlifGrid grid2 = make_test_grid(rows, cols, 10, 20, 'A');
+    for (int i = 0; i < cols * rows; i++) {
+        grid2.cells[i].r = 100;
+        grid2.cells[i].g = 150;
+        grid2.cells[i].b = 200;
+    }
+    /* Cell 0: diff by 2 per channel — within threshold=4, should snap */
+    grid2.cells[0].r = 102;
+    grid2.cells[0].g = 148;
+    grid2.cells[0].b = 201;
+    /* Cell 1: diff by 10 per channel — exceeds threshold=4, should NOT snap */
+    grid2.cells[1].r = 110;
+    grid2.cells[1].g = 140;
+    grid2.cells[1].b = 210;
+    /* Cell 2: different char — should NOT snap (char mismatch) */
+    grid2.cells[2].ch = 'B';
+    grid2.cells[2].r = 101;
+
+    GlifWriter gw;
+    ASSERT_EQ(glif_writer_init_v2(&gw, path, cols, rows, 10, 20, 30.0f, 0, 1), 0);
+    glif_writer_set_threshold(&gw, 4);
+    glif_writer_frame(&gw, &grid1);
+    glif_writer_frame(&gw, &grid2);
+    ASSERT_EQ(glif_writer_finish(&gw), 0);
+
+    /* Read back and decode frame 2 */
+    size_t file_len;
+    uint8_t *file_data = read_file(path, &file_len);
+    ASSERT_TRUE(file_data != NULL);
+
+    GlifReader gr;
+    ASSERT_EQ(glif_reader_open(&gr, file_data, file_len), 0);
+    ASSERT_EQ(glif_reader_decode(&gr, 1), 0);
+    const uint8_t *decoded = glif_reader_frame_data(&gr);
+    ASSERT_TRUE(decoded != NULL);
+
+    /* Cell 0: should have been snapped to frame 1 values */
+    ASSERT_EQ(decoded[0*4+0], (uint8_t)'A');
+    ASSERT_EQ(decoded[0*4+1], 100);
+    ASSERT_EQ(decoded[0*4+2], 150);
+    ASSERT_EQ(decoded[0*4+3], 200);
+
+    /* Cell 1: diff exceeded threshold, should have frame 2 values */
+    ASSERT_EQ(decoded[1*4+0], (uint8_t)'A');
+    ASSERT_EQ(decoded[1*4+1], 110);
+    ASSERT_EQ(decoded[1*4+2], 140);
+    ASSERT_EQ(decoded[1*4+3], 210);
+
+    /* Cell 2: different char, should NOT snap */
+    ASSERT_EQ(decoded[2*4+0], (uint8_t)'B');
+
+    glif_reader_close(&gr);
+    free(file_data);
+    remove(path);
+    free(grid1.cells);
+    free(grid2.cells);
+}
+
+UTEST(output, glif_writer_quant_threshold_combined) {
+    const char *path = "/tmp/glif_test_quant_thresh.glif";
+    int cols = 2, rows = 2;
+
+    /* Frame 1: known values (already quantized at shift=2 → mask 0xFC) */
+    GlifGrid grid1 = make_test_grid(rows, cols, 10, 20, 'X');
+    for (int i = 0; i < cols * rows; i++) {
+        grid1.cells[i].r = 100;  /* 100 & 0xFC = 100 */
+        grid1.cells[i].g = 152;  /* 152 & 0xFC = 152 */
+        grid1.cells[i].b = 204;  /* 204 & 0xFC = 204 */
+    }
+
+    /* Frame 2: small diffs that after quantization fall within threshold */
+    GlifGrid grid2 = make_test_grid(rows, cols, 10, 20, 'X');
+    /* Cell 0: r=103→quant→100, diff=0 from frame1's 100 → within thresh=4 → snap */
+    grid2.cells[0].r = 103;
+    grid2.cells[0].g = 155;  /* 155→quant→152, diff=0 */
+    grid2.cells[0].b = 207;  /* 207→quant→204, diff=0 */
+    /* Cell 1: large diff even after quant */
+    grid2.cells[1].r = 120;  /* 120→quant→120, diff=20 from 100 → NOT snapped */
+    grid2.cells[1].g = 152;
+    grid2.cells[1].b = 204;
+
+    GlifWriter gw;
+    ASSERT_EQ(glif_writer_init_v2(&gw, path, cols, rows, 10, 20, 30.0f, 0, 1), 0);
+    glif_writer_set_quant(&gw, 2);
+    glif_writer_set_threshold(&gw, 4);
+    glif_writer_frame(&gw, &grid1);
+    glif_writer_frame(&gw, &grid2);
+    ASSERT_EQ(glif_writer_finish(&gw), 0);
+
+    size_t file_len;
+    uint8_t *file_data = read_file(path, &file_len);
+    ASSERT_TRUE(file_data != NULL);
+
+    GlifReader gr;
+    ASSERT_EQ(glif_reader_open(&gr, file_data, file_len), 0);
+
+    /* Verify frame 1: RGB quantized */
+    ASSERT_EQ(glif_reader_decode(&gr, 0), 0);
+    const uint8_t *d0 = glif_reader_frame_data(&gr);
+    ASSERT_EQ(d0[0*4+1], 100);  /* 100 & 0xFC = 100 */
+    ASSERT_EQ(d0[0*4+2], 152);  /* 152 & 0xFC = 152 */
+    ASSERT_EQ(d0[0*4+3], 204);  /* 204 & 0xFC = 204 */
+
+    /* Verify frame 2 */
+    ASSERT_EQ(glif_reader_decode(&gr, 1), 0);
+    const uint8_t *d1 = glif_reader_frame_data(&gr);
+
+    /* Cell 0: quantized diffs are 0, within threshold → snapped to frame 1 */
+    ASSERT_EQ(d1[0*4+1], 100);
+    ASSERT_EQ(d1[0*4+2], 152);
+    ASSERT_EQ(d1[0*4+3], 204);
+
+    /* Cell 1: r diff after quant = |120-100| = 20 > threshold=4 → NOT snapped */
+    ASSERT_EQ(d1[1*4+1], 120);
+
+    glif_reader_close(&gr);
+    free(file_data);
+    remove(path);
+    free(grid1.cells);
+    free(grid2.cells);
 }
 
 UTEST_MAIN();

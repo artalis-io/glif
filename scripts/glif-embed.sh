@@ -3,9 +3,8 @@
 #
 # Usage: ./scripts/glif-embed.sh input.glif [-o output.html]
 #
-# The .glif data is gzip-compressed before base64 encoding, then decompressed
-# in the browser via DecompressionStream. The WASM binary and JS loader are
-# also inlined. No server required — just open the HTML in a browser.
+# The .glif data is base64-encoded and inlined. The WASM binary and JS loader
+# are also inlined. No server required — just open the HTML in a browser.
 
 set -euo pipefail
 
@@ -16,14 +15,13 @@ WEB_DIR="$PROJECT_DIR/web"
 WASM_JS="$WEB_DIR/glif-player-wasm.js"
 WASM_BIN="$WEB_DIR/glif-player-wasm.wasm"
 
-# Max recommended .glif size for embedding (50MB raw → ~45MB gzip → ~60MB b64)
+# Max recommended .glif size for embedding (50MB → ~67MB b64)
 MAX_GLIF_SIZE=$((50 * 1048576))
 
 usage() {
     echo "Usage: $0 <input.glif> [-o output.html] [--force]"
     echo ""
     echo "Bundles a .glif file into a self-contained HTML video player."
-    echo "The .glif data is gzip-compressed to reduce file size."
     echo ""
     echo "Options:"
     echo "  -o <path>   Output HTML file (default: <input>.html)"
@@ -82,18 +80,9 @@ fi
 echo "Embedding: $NAME ($GLIF_SIZE bytes)"
 echo "WASM binary: $WASM_SIZE bytes"
 
-# Gzip compress the .glif data
-echo "Compressing .glif data..."
-GLIF_GZ=$(mktemp)
-trap 'rm -f "$GLIF_GZ"' EXIT
-gzip -9c "$INPUT" > "$GLIF_GZ"
-GZ_SIZE=$(wc -c < "$GLIF_GZ" | tr -d ' ')
-RATIO=$(echo "$GLIF_SIZE $GZ_SIZE" | awk '{printf "%.1f", (1 - $2/$1) * 100}')
-echo "  Compressed: $GZ_SIZE bytes (${RATIO}% reduction)"
-
-# Base64 encode
-echo "Encoding compressed .glif data..."
-GLIF_B64=$(base64 < "$GLIF_GZ" | tr -d '\n')
+# Base64 encode .glif data directly (already deflate-compressed internally)
+echo "Encoding .glif data..."
+GLIF_B64=$(base64 < "$INPUT" | tr -d '\n')
 echo "Encoding WASM binary..."
 WASM_B64=$(base64 < "$WASM_BIN" | tr -d '\n')
 
@@ -203,7 +192,7 @@ canvas { display: block; max-width: 100%; max-height: 100%; object-fit: contain;
   <div class="canvas-area" id="canvasArea">
     <div class="loading-overlay" id="loadingOverlay">
       <div class="spinner"></div>
-      <div class="label" id="loadingLabel">Decompressing...</div>
+      <div class="label" id="loadingLabel">Loading...</div>
     </div>
     <canvas id="glif-player-canvas" width="1280" height="720"></canvas>
   </div>
@@ -229,6 +218,10 @@ canvas { display: block; max-width: 100%; max-height: 100%; object-fit: contain;
       <option value="2">2x</option>
       <option value="4">4x</option>
     </select>
+
+    <button class="btn" id="audioBtn" title="Toggle Audio (A)" style="display:none">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>
+    </button>
 
     <button class="btn" id="hdrBtn" title="HDR Enhancement (H)">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
@@ -263,8 +256,8 @@ cat >> "$OUTPUT" << 'EMBED_EOF'
 </script>
 EMBED_EOF
 
-# Write the gzip'd glif data inside a non-JS script tag to avoid JS parser overhead
-echo '<script type="application/octet-stream" id="glifGzData">' >> "$OUTPUT"
+# Write the .glif data inside a non-JS script tag to avoid JS parser overhead
+echo '<script type="application/octet-stream" id="glifData">' >> "$OUTPUT"
 echo "$GLIF_B64" >> "$OUTPUT"
 echo '</script>' >> "$OUTPUT"
 
@@ -284,6 +277,7 @@ cat >> "$OUTPUT" << 'EMBED_EOF'
     var progressFill = document.getElementById('progressFill');
     var speedSel = document.getElementById('speed');
     var hdrBtn = document.getElementById('hdrBtn');
+    var audioBtn = document.getElementById('audioBtn');
     var fullscreenBtn = document.getElementById('fullscreenBtn');
     var playerWrap = document.getElementById('playerWrap');
     var canvasArea = document.getElementById('canvasArea');
@@ -300,33 +294,10 @@ cat >> "$OUTPUT" << 'EMBED_EOF'
         var dpr = window.devicePixelRatio || 1;
         module._player_init(dpr, canvas.width, canvas.height);
 
-        // Decompress gzip'd .glif data via DecompressionStream
-        loadingLabel.textContent = 'Decompressing video...';
-        var gzB64 = document.getElementById('glifGzData').textContent.trim();
-        var gzBin = Uint8Array.from(atob(gzB64), function(c) { return c.charCodeAt(0); });
-
-        var ds = new DecompressionStream('gzip');
-        var writer = ds.writable.getWriter();
-        var reader = ds.readable.getReader();
-
-        writer.write(gzBin);
-        writer.close();
-
-        var chunks = [];
-        var totalLen = 0;
-        while (true) {
-            var result = await reader.read();
-            if (result.done) break;
-            chunks.push(result.value);
-            totalLen += result.value.length;
-        }
-
-        var glifBytes = new Uint8Array(totalLen);
-        var offset = 0;
-        for (var i = 0; i < chunks.length; i++) {
-            glifBytes.set(chunks[i], offset);
-            offset += chunks[i].length;
-        }
+        // Decode base64 .glif data
+        loadingLabel.textContent = 'Decoding video...';
+        var glifB64 = document.getElementById('glifData').textContent.trim();
+        var glifBytes = Uint8Array.from(atob(glifB64), function(c) { return c.charCodeAt(0); });
 
         // Load into WASM player
         loadingLabel.textContent = 'Loading player...';
@@ -399,6 +370,7 @@ cat >> "$OUTPUT" << 'EMBED_EOF'
             module._player_decode_frame(frame);
             module._player_render();
             updateUI(frame);
+            if (playing) { stopAudio(); startAudio(); }
         }
 
         function tick(now) {
@@ -417,6 +389,7 @@ cat >> "$OUTPUT" << 'EMBED_EOF'
             if (advanced) {
                 module._player_decode_frame(currentFrame);
                 module._player_render();
+                playAudioForFrame(currentFrame);
                 updateUI(currentFrame);
             }
             rafId = requestAnimationFrame(tick);
@@ -426,11 +399,13 @@ cat >> "$OUTPUT" << 'EMBED_EOF'
             if (playing) {
                 playing = false;
                 if (rafId !== null) { cancelAnimationFrame(rafId); rafId = null; }
+                stopAudio();
             } else {
                 playing = true;
                 lastTime = performance.now();
                 accumulator = 0;
                 rafId = requestAnimationFrame(tick);
+                startAudio();
             }
             syncPlayIcon();
         }
@@ -441,6 +416,85 @@ cat >> "$OUTPUT" << 'EMBED_EOF'
             hdrBtn.classList.toggle('active', hdrOn);
             if (!playing) seek(currentFrame);
         }
+
+        // Audio state (crushed PCM playback)
+        var hasAudio = false;
+        try { hasAudio = !!module._player_has_audio(); } catch(e) {}
+        var audioCtx = null;
+        var audioGainNode = null;
+        var audioBuffer = null;     // decoded AudioBuffer from crushed PCM
+        var audioSource = null;     // current AudioBufferSourceNode
+        var audioMuted = true;
+
+        if (hasAudio) {
+            audioBtn.style.display = '';
+        }
+
+        function buildAudioBuffer() {
+            if (!hasAudio) return;
+            try {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                audioGainNode = audioCtx.createGain();
+                audioGainNode.gain.value = 0;
+                audioGainNode.connect(audioCtx.destination);
+
+                var pcmPtr = module._player_get_audio_pcm_ptr();
+                var pcmLen = module._player_get_audio_pcm_len();
+                var sampleRate = module._player_get_audio_sample_rate();
+                var bitDepth = module._player_get_audio_bit_depth();
+
+                if (!pcmPtr || pcmLen <= 0 || sampleRate <= 0) { hasAudio = false; return; }
+
+                audioBuffer = audioCtx.createBuffer(1, pcmLen, sampleRate);
+                var channel = audioBuffer.getChannelData(0);
+                var maxVal = (bitDepth === 4) ? 15 : 255;
+                var mid = maxVal / 2;
+                for (var i = 0; i < pcmLen; i++) {
+                    channel[i] = (module.HEAPU8[pcmPtr + i] - mid) / mid;
+                }
+            } catch(e) { hasAudio = false; }
+        }
+
+        function startAudio() {
+            if (!hasAudio || audioMuted || !audioCtx || !audioBuffer) return;
+            if (audioCtx.state === 'suspended') audioCtx.resume();
+            stopAudio();
+            var offset = currentFrame / fps;
+            if (offset >= audioBuffer.duration) return;
+            audioSource = audioCtx.createBufferSource();
+            audioSource.buffer = audioBuffer;
+            audioSource.playbackRate.value = speed;
+            audioSource.loop = true;
+            audioSource.connect(audioGainNode);
+            audioSource.start(0, offset);
+        }
+
+        function stopAudio() {
+            if (audioSource) {
+                try { audioSource.stop(); } catch(e) {}
+                audioSource.disconnect();
+                audioSource = null;
+            }
+        }
+
+        function toggleAudio() {
+            audioMuted = !audioMuted;
+            audioBtn.classList.toggle('active', !audioMuted);
+            if (audioGainNode) {
+                audioGainNode.gain.value = audioMuted ? 0 : 1;
+            }
+            if (!audioMuted && playing) {
+                startAudio();
+            } else if (audioMuted) {
+                stopAudio();
+            }
+        }
+
+        function playAudioForFrame(videoFrame) {
+            /* no-op: audio plays continuously via AudioBufferSourceNode */
+        }
+
+        buildAudioBuffer();
 
         function toggleFullscreen() {
             if (document.fullscreenElement) {
@@ -478,9 +532,11 @@ cat >> "$OUTPUT" << 'EMBED_EOF'
 
         speedSel.addEventListener('change', function() {
             speed = parseFloat(speedSel.value);
+            if (audioSource) audioSource.playbackRate.value = speed;
         });
 
         hdrBtn.addEventListener('click', toggleHDR);
+        audioBtn.addEventListener('click', toggleAudio);
         fullscreenBtn.addEventListener('click', toggleFullscreen);
         document.addEventListener('fullscreenchange', function() { sizeCanvas(); });
 
@@ -497,6 +553,9 @@ cat >> "$OUTPUT" << 'EMBED_EOF'
                 case 'h': case 'H':
                     toggleHDR();
                     break;
+                case 'a': case 'A':
+                    toggleAudio();
+                    break;
                 case 'ArrowLeft':
                     seek(Math.max(0, currentFrame - Math.round(fps * 5)));
                     break;
@@ -507,11 +566,13 @@ cat >> "$OUTPUT" << 'EMBED_EOF'
                     e.preventDefault();
                     speed = Math.min(10, speed * 2);
                     speedSel.value = speed;
+                    if (audioSource) audioSource.playbackRate.value = speed;
                     break;
                 case 'ArrowDown':
                     e.preventDefault();
                     speed = Math.max(0.25, speed / 2);
                     speedSel.value = speed;
+                    if (audioSource) audioSource.playbackRate.value = speed;
                     break;
             }
         });

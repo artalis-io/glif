@@ -29,6 +29,16 @@ export class GlifPlayer {
         // HDR
         this._hdrIntensity = 0;
 
+        // Audio (crushed PCM)
+        this._audioCtx = null;
+        this._audioEnabled = false;
+        this._audioMuted = false;
+        this._audioBuffer = null;    // decoded AudioBuffer
+        this._audioSource = null;    // current AudioBufferSourceNode
+        this._audioGain = null;
+        this._audioStartTime = 0;    // audioCtx.currentTime when source started
+        this._audioStartOffset = 0;  // offset in seconds when source started
+
         // Callbacks
         this.onload = null;
         this.onframe = null;
@@ -44,6 +54,7 @@ export class GlifPlayer {
     get flags() { return this._flags; }
     get currentFrame() { return this._currentFrame; }
     get isPlaying() { return this._playing; }
+    get hasAudio() { return this._audioEnabled; }
 
     /**
      * Initialize WASM module and WebGL context.
@@ -107,10 +118,18 @@ export class GlifPlayer {
         this._cellH = this._module._player_get_cell_h();
         this._flags = this._module._player_get_flags();
 
+        // Check for audio
+        this._audioEnabled = !!this._module._player_has_audio();
+
         // Decode and render first frame
         this._currentFrame = 0;
         this._module._player_decode_frame(0);
         this._module._player_render();
+
+        // Build AudioBuffer from crushed PCM
+        if (this._audioEnabled) {
+            this._buildAudioBuffer();
+        }
 
         if (this.onload) this.onload();
     }
@@ -125,6 +144,7 @@ export class GlifPlayer {
         this._accumulator = 0;
         this._tick = this._tick.bind(this);
         this._rafId = requestAnimationFrame(this._tick);
+        this._startAudio();
     }
 
     /**
@@ -136,6 +156,7 @@ export class GlifPlayer {
             cancelAnimationFrame(this._rafId);
             this._rafId = null;
         }
+        this._stopAudio();
     }
 
     /**
@@ -148,6 +169,10 @@ export class GlifPlayer {
         this._currentFrame = frame;
         this._module._player_decode_frame(frame);
         this._module._player_render();
+        if (this._playing) {
+            this._stopAudio();
+            this._startAudio();
+        }
         if (this.onframe) this.onframe(frame);
     }
 
@@ -157,6 +182,9 @@ export class GlifPlayer {
      */
     setSpeed(multiplier) {
         this._speed = Math.max(0.1, Math.min(multiplier, 10));
+        if (this._audioSource) {
+            this._audioSource.playbackRate.value = this._speed;
+        }
     }
 
     /**
@@ -173,6 +201,10 @@ export class GlifPlayer {
      */
     destroy() {
         this.pause();
+        if (this._audioCtx) {
+            this._audioCtx.close();
+            this._audioCtx = null;
+        }
         if (this._module) {
             this._module._player_free();
         }
@@ -191,6 +223,84 @@ export class GlifPlayer {
         this._module._player_resize(w, h);
         // Re-render current frame at new size
         this._module._player_render();
+    }
+
+    /**
+     * Toggle audio mute.
+     */
+    toggleMute() {
+        this._audioMuted = !this._audioMuted;
+        if (this._audioGain) {
+            this._audioGain.gain.value = this._audioMuted ? 0 : 1;
+        }
+    }
+
+    /** @private — Build AudioBuffer from crushed PCM in WASM memory */
+    _buildAudioBuffer() {
+        try {
+            if (!this._audioCtx) {
+                this._audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            }
+            this._audioGain = this._audioCtx.createGain();
+            this._audioGain.gain.value = this._audioMuted ? 0 : 1;
+            this._audioGain.connect(this._audioCtx.destination);
+
+            const pcmPtr = this._module._player_get_audio_pcm_ptr();
+            const pcmLen = this._module._player_get_audio_pcm_len();
+            const sampleRate = this._module._player_get_audio_sample_rate();
+            const bitDepth = this._module._player_get_audio_bit_depth();
+
+            if (!pcmPtr || pcmLen <= 0 || sampleRate <= 0) {
+                this._audioEnabled = false;
+                return;
+            }
+
+            // Create AudioBuffer
+            this._audioBuffer = this._audioCtx.createBuffer(1, pcmLen, sampleRate);
+            const channel = this._audioBuffer.getChannelData(0);
+
+            // Convert unsigned 8-bit (or 4-bit) PCM to float32 [-1, 1]
+            const maxVal = (bitDepth === 4) ? 15 : 255;
+            const mid = maxVal / 2;
+            for (let i = 0; i < pcmLen; i++) {
+                const sample = this._module.HEAPU8[pcmPtr + i];
+                channel[i] = (sample - mid) / mid;
+            }
+        } catch (e) {
+            this._audioEnabled = false;
+        }
+    }
+
+    /** @private — Start audio playback from current video position */
+    _startAudio() {
+        if (!this._audioEnabled || !this._audioCtx || !this._audioBuffer || this._audioMuted) return;
+
+        if (this._audioCtx.state === 'suspended') {
+            this._audioCtx.resume();
+        }
+
+        this._stopAudio();
+
+        const offset = this._currentFrame / this._fps;
+        if (offset >= this._audioBuffer.duration) return;
+
+        this._audioSource = this._audioCtx.createBufferSource();
+        this._audioSource.buffer = this._audioBuffer;
+        this._audioSource.playbackRate.value = this._speed;
+        this._audioSource.loop = this._loop;
+        this._audioSource.connect(this._audioGain);
+        this._audioSource.start(0, offset);
+        this._audioStartTime = this._audioCtx.currentTime;
+        this._audioStartOffset = offset;
+    }
+
+    /** @private — Stop audio playback */
+    _stopAudio() {
+        if (this._audioSource) {
+            try { this._audioSource.stop(); } catch (e) { /* already stopped */ }
+            this._audioSource.disconnect();
+            this._audioSource = null;
+        }
     }
 
     /** @private */
@@ -214,6 +324,7 @@ export class GlifPlayer {
                 } else {
                     this._currentFrame = this._frames - 1;
                     this._playing = false;
+                    this._stopAudio();
                     if (this.onend) this.onend();
                     return;
                 }

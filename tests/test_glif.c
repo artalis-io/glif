@@ -91,7 +91,7 @@ UTEST(glif_reader, open_v1) {
 
     GlifReader gr;
     ASSERT_EQ(glif_reader_open(&gr, buf, len), 0);
-    ASSERT_EQ(gr.header.version, GLIF_VERSION_1);
+    ASSERT_EQ(gr.header.version, GLIF_VERSION);
     ASSERT_EQ(gr.header.cols, cols);
     ASSERT_EQ(gr.header.rows, rows);
     ASSERT_EQ(gr.header.cell_w, 10);
@@ -104,7 +104,7 @@ UTEST(glif_reader, open_v1) {
     remove(path);
 }
 
-UTEST(glif_reader, open_v2) {
+UTEST(glif_reader, open_compressed) {
     const char *path = "/tmp/glif_test_reader_v2.glif";
     int cols = 4, rows = 3;
     GlifWriter gw;
@@ -117,7 +117,7 @@ UTEST(glif_reader, open_v2) {
 
     GlifReader gr;
     ASSERT_EQ(glif_reader_open(&gr, buf, len), 0);
-    ASSERT_EQ(gr.header.version, GLIF_VERSION_2);
+    ASSERT_EQ(gr.header.version, GLIF_VERSION);
     ASSERT_EQ(gr.header.flags & GLIF_FLAG_DARK, GLIF_FLAG_DARK);
     ASSERT_EQ(gr.header.flags & GLIF_FLAG_COMPRESSED, GLIF_FLAG_COMPRESSED);
     ASSERT_EQ(gr.header.cols, cols);
@@ -396,6 +396,206 @@ UTEST(glif_reader, zero_frames) {
 
     glif_reader_close(&gr);
     free(buf);
+    remove(path);
+}
+
+/* ── Compressed tests ── */
+
+UTEST(glif_reader, roundtrip_compressed_single) {
+    const char *path = "/tmp/glif_test_rt_v3_single.glif";
+    int cols = 4, rows = 3;
+    GlifGrid grid = make_test_grid(rows, cols, 10, 20, 'A');
+    vary_grid(&grid, 0);
+    uint8_t *expected = flatten_grid(&grid);
+    ASSERT_TRUE(expected != NULL);
+
+    GlifWriter gw;
+    ASSERT_EQ(glif_writer_init_v2(&gw, path, cols, rows, 10, 20, 30.0f, 0, 1), 0);
+    glif_writer_frame(&gw, &grid);
+    ASSERT_EQ(glif_writer_finish(&gw), 0);
+
+    size_t len;
+    uint8_t *buf = file_to_buffer(path, &len);
+    ASSERT_TRUE(buf != NULL);
+
+    GlifReader gr;
+    ASSERT_EQ(glif_reader_open(&gr, buf, len), 0);
+    ASSERT_EQ(gr.header.version, GLIF_VERSION);
+    ASSERT_EQ(gr.header.frames, (uint32_t)1);
+    ASSERT_EQ(glif_reader_decode(&gr, 0), 0);
+
+    const uint8_t *decoded = glif_reader_frame_data(&gr);
+    ASSERT_TRUE(decoded != NULL);
+    ASSERT_EQ(memcmp(decoded, expected, (size_t)(cols * rows) * 4), 0);
+
+    glif_reader_close(&gr);
+    free(buf);
+    free(expected);
+    free(grid.cells);
+    remove(path);
+}
+
+UTEST(glif_reader, roundtrip_compressed_multi) {
+    const char *path = "/tmp/glif_test_rt_v3_multi.glif";
+    int cols = 20, rows = 15, nframes = 10;
+    GlifGrid grid = make_test_grid(rows, cols, 10, 20, 'A');
+
+    uint8_t *expected[10];
+    GlifWriter gw;
+    ASSERT_EQ(glif_writer_init_v2(&gw, path, cols, rows, 10, 20, 30.0f, 0, 1), 0);
+    for (int i = 0; i < nframes; i++) {
+        vary_grid(&grid, i);
+        expected[i] = flatten_grid(&grid);
+        ASSERT_TRUE(expected[i] != NULL);
+        glif_writer_frame(&gw, &grid);
+    }
+    ASSERT_EQ(glif_writer_finish(&gw), 0);
+
+    size_t len;
+    uint8_t *buf = file_to_buffer(path, &len);
+    ASSERT_TRUE(buf != NULL);
+
+    GlifReader gr;
+    ASSERT_EQ(glif_reader_open(&gr, buf, len), 0);
+    ASSERT_EQ(gr.header.version, GLIF_VERSION);
+    ASSERT_EQ(gr.header.frames, (uint32_t)nframes);
+
+    for (int i = 0; i < nframes; i++) {
+        ASSERT_EQ(glif_reader_decode(&gr, (uint32_t)i), 0);
+        const uint8_t *decoded = glif_reader_frame_data(&gr);
+        ASSERT_TRUE(decoded != NULL);
+        ASSERT_EQ(memcmp(decoded, expected[i], (size_t)(cols * rows) * 4), 0);
+    }
+
+    glif_reader_close(&gr);
+    free(buf);
+    for (int i = 0; i < nframes; i++) free(expected[i]);
+    free(grid.cells);
+    remove(path);
+}
+
+UTEST(glif_reader, random_access_compressed) {
+    const char *path = "/tmp/glif_test_random_v3.glif";
+    int cols = 20, rows = 15, nframes = 10;
+    GlifGrid grid = make_test_grid(rows, cols, 10, 20, 'A');
+
+    uint8_t *expected[10];
+    GlifWriter gw;
+    ASSERT_EQ(glif_writer_init_v2(&gw, path, cols, rows, 10, 20, 30.0f, 0, 1), 0);
+    for (int i = 0; i < nframes; i++) {
+        vary_grid(&grid, i);
+        expected[i] = flatten_grid(&grid);
+        ASSERT_TRUE(expected[i] != NULL);
+        glif_writer_frame(&gw, &grid);
+    }
+    ASSERT_EQ(glif_writer_finish(&gw), 0);
+
+    size_t len;
+    uint8_t *buf = file_to_buffer(path, &len);
+    ASSERT_TRUE(buf != NULL);
+
+    GlifReader gr;
+    ASSERT_EQ(glif_reader_open(&gr, buf, len), 0);
+
+    /* Decode frames in non-sequential order */
+    int order[] = {5, 0, 9, 3, 7};
+    for (int i = 0; i < 5; i++) {
+        int f = order[i];
+        ASSERT_EQ(glif_reader_decode(&gr, (uint32_t)f), 0);
+        const uint8_t *decoded = glif_reader_frame_data(&gr);
+        ASSERT_TRUE(decoded != NULL);
+        ASSERT_EQ(memcmp(decoded, expected[f], (size_t)(cols * rows) * 4), 0);
+    }
+
+    glif_reader_close(&gr);
+    free(buf);
+    for (int i = 0; i < nframes; i++) free(expected[i]);
+    free(grid.cells);
+    remove(path);
+}
+
+UTEST(glif_reader, mostly_static_frames) {
+    /* Test with frames that are mostly identical — should heavily favor delta codecs */
+    const char *path = "/tmp/glif_test_v3_static.glif";
+    int cols = 30, rows = 20, nframes = 5;
+    GlifGrid grid = make_test_grid(rows, cols, 10, 20, 'A');
+
+    uint8_t *expected[5];
+    GlifWriter gw;
+    ASSERT_EQ(glif_writer_init_v2(&gw, path, cols, rows, 10, 20, 30.0f, 0, 1), 0);
+    for (int i = 0; i < nframes; i++) {
+        /* Only change a few cells per frame */
+        if (i > 0) {
+            int idx = i * 3;
+            if (idx < cols * rows) {
+                grid.cells[idx].ch = (char)(33 + i);
+                grid.cells[idx].r = (uint8_t)(i * 50);
+            }
+        }
+        expected[i] = flatten_grid(&grid);
+        ASSERT_TRUE(expected[i] != NULL);
+        glif_writer_frame(&gw, &grid);
+    }
+    ASSERT_EQ(glif_writer_finish(&gw), 0);
+
+    size_t len;
+    uint8_t *buf = file_to_buffer(path, &len);
+    ASSERT_TRUE(buf != NULL);
+
+    GlifReader gr;
+    ASSERT_EQ(glif_reader_open(&gr, buf, len), 0);
+    ASSERT_EQ(gr.header.version, GLIF_VERSION);
+
+    for (int i = 0; i < nframes; i++) {
+        ASSERT_EQ(glif_reader_decode(&gr, (uint32_t)i), 0);
+        const uint8_t *decoded = glif_reader_frame_data(&gr);
+        ASSERT_TRUE(decoded != NULL);
+        ASSERT_EQ(memcmp(decoded, expected[i], (size_t)(cols * rows) * 4), 0);
+    }
+
+    glif_reader_close(&gr);
+    free(buf);
+    for (int i = 0; i < nframes; i++) free(expected[i]);
+    free(grid.cells);
+    remove(path);
+}
+
+UTEST(glif_reader, uncompressed_still_works) {
+    /* Ensure uncompressed files still load correctly */
+    const char *path = "/tmp/glif_test_compat_v1.glif";
+    int cols = 4, rows = 3, nframes = 3;
+    GlifGrid grid = make_test_grid(rows, cols, 10, 20, 'A');
+
+    uint8_t *expected[3];
+    GlifWriter gw;
+    ASSERT_EQ(glif_writer_init(&gw, path, cols, rows, 10, 20, 30.0f, 0), 0);
+    for (int i = 0; i < nframes; i++) {
+        vary_grid(&grid, i);
+        expected[i] = flatten_grid(&grid);
+        ASSERT_TRUE(expected[i] != NULL);
+        glif_writer_frame(&gw, &grid);
+    }
+    ASSERT_EQ(glif_writer_finish(&gw), 0);
+
+    size_t len;
+    uint8_t *buf = file_to_buffer(path, &len);
+    ASSERT_TRUE(buf != NULL);
+
+    GlifReader gr;
+    ASSERT_EQ(glif_reader_open(&gr, buf, len), 0);
+    ASSERT_EQ(gr.header.version, GLIF_VERSION);
+
+    for (int i = 0; i < nframes; i++) {
+        ASSERT_EQ(glif_reader_decode(&gr, (uint32_t)i), 0);
+        const uint8_t *decoded = glif_reader_frame_data(&gr);
+        ASSERT_TRUE(decoded != NULL);
+        ASSERT_EQ(memcmp(decoded, expected[i], (size_t)(cols * rows) * 4), 0);
+    }
+
+    glif_reader_close(&gr);
+    free(buf);
+    for (int i = 0; i < nframes; i++) free(expected[i]);
+    free(grid.cells);
     remove(path);
 }
 
