@@ -3,11 +3,11 @@
  *
  * Forwards mouse/touch/keyboard events to the C UI module,
  * handles file picking, webcam, video playback, export (PNG/PPM/SVG),
- * comparison, and DPR-aware canvas sizing.
+ * and DPR-aware canvas sizing.
  *
- * The bottom media bar (HDR, compare, export, playback controls) is
- * rendered in C via Clay/Nuklear. JS provides global callback functions
- * that C calls via EM_ASM when buttons are pressed.
+ * All visual UI (toolbar, viewport, media bar, compare overlays,
+ * drop overlay) is rendered in C via Clay/Nuklear/WebGL.
+ * JS provides global callback functions that C calls via EM_ASM.
  */
 (function () {
     'use strict';
@@ -15,10 +15,6 @@
     const canvas = document.getElementById('canvas');
     const appWrap = document.getElementById('appWrap');
     const canvasArea = document.getElementById('canvasArea');
-    const dropOverlay = document.getElementById('dropOverlay');
-    const compareDivider = document.getElementById('compareDivider');
-    const compareLabelL = document.getElementById('compareLabelL');
-    const compareLabelR = document.getElementById('compareLabelR');
 
     let Module = null;
     let cameras = [];
@@ -30,7 +26,6 @@
     let isVideoMode = false;
     let hasContent = false;
     let compareOn = false;
-    let sliderX = 0.5;
     let audioMuted = true;
     let audioAvailable = false;
     let originalImgSrc = null; /* URL for comparison of dropped images */
@@ -52,7 +47,6 @@
                 Module._app_resize(canvas.width, canvas.height);
             }
         }
-        if (compareOn) sizeCompare();
     }
 
     window.addEventListener('resize', resize);
@@ -66,12 +60,11 @@
     }
     watchDpr();
 
-    /* ── Content mode (replaces old showControls) ── */
+    /* ── Content mode ── */
 
     function showControls(videoMode) {
         isVideoMode = videoMode;
         hasContent = true;
-        dropOverlay.classList.add('hidden');
         if (Module && Module._app_set_content_mode) {
             Module._app_set_content_mode(1, videoMode ? 1 : 0);
         }
@@ -82,29 +75,38 @@
 
     function mouseHandler(e) {
         if (!Module) return;
-        const dpr = window.devicePixelRatio || 1;
         const rect = canvas.getBoundingClientRect();
-        const x = (e.clientX - rect.left) * dpr;
-        const y = (e.clientY - rect.top) * dpr;
-        Module._app_mouse(Math.round(x / dpr), Math.round(y / dpr), e.buttons);
+        Module._app_mouse(
+            Math.round(e.clientX - rect.left),
+            Math.round(e.clientY - rect.top),
+            e.buttons);
     }
 
     canvas.addEventListener('mousemove', mouseHandler);
     canvas.addEventListener('mousedown', mouseHandler);
     canvas.addEventListener('mouseup', mouseHandler);
 
+    /* Ensure C gets mouseup even when released outside canvas (for compare drag) */
+    document.addEventListener('mouseup', function (e) {
+        if (!Module) return;
+        var rect = canvas.getBoundingClientRect();
+        Module._app_mouse(
+            Math.round(e.clientX - rect.left),
+            Math.round(e.clientY - rect.top),
+            0);
+    });
+
     /* ── Touch events ── */
 
     function touchHandler(e) {
         if (!Module) return;
         e.preventDefault();
-        const dpr = window.devicePixelRatio || 1;
-        const rect = canvas.getBoundingClientRect();
 
         for (let i = 0; i < e.changedTouches.length; i++) {
             const t = e.changedTouches[i];
-            const x = Math.round((t.clientX - rect.left));
-            const y = Math.round((t.clientY - rect.top));
+            const rect = canvas.getBoundingClientRect();
+            const x = Math.round(t.clientX - rect.left);
+            const y = Math.round(t.clientY - rect.top);
             let phase = 1;
             if (e.type === 'touchstart') phase = 0;
             else if (e.type === 'touchend' || e.type === 'touchcancel') phase = 2;
@@ -116,6 +118,12 @@
     canvas.addEventListener('touchmove', touchHandler, { passive: false });
     canvas.addEventListener('touchend', touchHandler, { passive: false });
     canvas.addEventListener('touchcancel', touchHandler, { passive: false });
+
+    /* Ensure C gets touchend even when released outside canvas */
+    document.addEventListener('touchend', function () {
+        if (!Module) return;
+        Module._app_touch(0, 0, 0, 2);
+    });
 
     /* ── Keyboard ── */
 
@@ -134,7 +142,7 @@
                 if (Module && Module._app_toggle_hdr) Module._app_toggle_hdr();
                 break;
             case 'c': case 'C':
-                glifToggleCompare(!compareOn);
+                if (Module && Module._app_toggle_compare) Module._app_toggle_compare();
                 break;
             case 'a': case 'A':
                 if (isVideoMode) glifToggleAudio();
@@ -187,20 +195,16 @@
     }
     window.glifToggleAudio = glifToggleAudio;
 
-    function glifToggleCompare(on) {
-        if (!hasContent || !Module) return;
+    /* Called from C when compare mode toggles */
+    window.glifOnCompareToggle = function (on) {
         compareOn = !!on;
-        canvasArea.classList.toggle('compare-active', compareOn);
-        compareDivider.style.display = compareOn ? 'block' : 'none';
-        compareLabelL.style.display = compareOn ? 'block' : 'none';
-        compareLabelR.style.display = compareOn ? 'block' : 'none';
-        Module._app_set_compare(compareOn ? 1 : 0, sliderX);
-        if (compareOn) {
-            if (!isVideoMode) uploadImageForCompare();
-            sizeCompare();
-        }
-    }
-    window.glifToggleCompare = glifToggleCompare;
+        if (on && !isVideoMode) uploadImageForCompare();
+    };
+
+    /* Called from C to set cursor (e.g. ew-resize during compare) */
+    window.glifSetCursor = function (cursor) {
+        canvasArea.style.cursor = cursor || '';
+    };
 
     window.glifExport = function (fmtIdx) {
         if (!hasContent) return;
@@ -220,34 +224,7 @@
 
     document.addEventListener('fullscreenchange', function () { resize(); });
 
-    /* ── Comparison (WebGL split) ── */
-
-    var contentRectPtr = 0;
-    function getContentRect() {
-        if (!Module) return null;
-        if (!contentRectPtr) contentRectPtr = Module._malloc(16);
-        Module._app_get_content_rect(contentRectPtr);
-        var view = new Float32Array(Module.HEAPU8.buffer, contentRectPtr, 4);
-        return { x: view[0], y: view[1], w: view[2], h: view[3] };
-    }
-
-    function sizeCompare() {
-        var cr = getContentRect();
-        if (!cr || cr.w <= 0) return;
-        var cRect = canvas.getBoundingClientRect();
-        var aRect = canvasArea.getBoundingClientRect();
-        var ox = cRect.left - aRect.left;
-        var oy = cRect.top - aRect.top;
-        var contentLeft = ox + cr.x;
-        var contentTop = oy + cr.y;
-        compareDivider.style.left = (contentLeft + cr.w * sliderX) + 'px';
-        compareDivider.style.top = contentTop + 'px';
-        compareDivider.style.height = cr.h + 'px';
-        compareLabelL.style.top = (contentTop + 8) + 'px';
-        compareLabelL.style.left = (contentLeft + 8) + 'px';
-        compareLabelR.style.top = (contentTop + 8) + 'px';
-        compareLabelR.style.right = (aRect.width - contentLeft - cr.w + 8) + 'px';
-    }
+    /* ── Comparison (image upload for WebGL split) ── */
 
     function uploadImageForCompare() {
         if (!originalImgSrc || !Module) return;
@@ -266,54 +243,6 @@
         };
         img.src = originalImgSrc;
     }
-
-    /* Draggable split: click/drag on canvasArea moves split position */
-    (function () {
-        var dragging = false;
-        function updateSplit(clientX) {
-            if (!compareOn || !Module) return;
-            var cr = getContentRect();
-            if (!cr || cr.w <= 0) return;
-            var cRect = canvas.getBoundingClientRect();
-            var contentLeft = cRect.left + cr.x;
-            sliderX = Math.max(0, Math.min(1, (clientX - contentLeft) / cr.w));
-            Module._app_set_compare(1, sliderX);
-            sizeCompare();
-        }
-        canvasArea.addEventListener('mousedown', function (e) {
-            if (!compareOn) return;
-            var cr = getContentRect();
-            if (!cr || cr.w <= 0) return;
-            var cRect = canvas.getBoundingClientRect();
-            var relX = e.clientX - cRect.left;
-            var relY = e.clientY - cRect.top;
-            if (relX < cr.x || relX > cr.x + cr.w ||
-                relY < cr.y || relY > cr.y + cr.h) return;
-            dragging = true;
-            updateSplit(e.clientX);
-            e.preventDefault();
-        });
-        canvasArea.addEventListener('touchstart', function (e) {
-            if (!compareOn) return;
-            var cr = getContentRect();
-            if (!cr || cr.w <= 0) return;
-            var cRect = canvas.getBoundingClientRect();
-            var t = e.touches[0];
-            var relX = t.clientX - cRect.left;
-            var relY = t.clientY - cRect.top;
-            if (relX < cr.x || relX > cr.x + cr.w ||
-                relY < cr.y || relY > cr.y + cr.h) return;
-            dragging = true;
-            updateSplit(t.clientX);
-            e.preventDefault();
-        }, { passive: false });
-        document.addEventListener('mousemove', function (e) { if (dragging) updateSplit(e.clientX); });
-        document.addEventListener('touchmove', function (e) {
-            if (dragging) { updateSplit(e.touches[0].clientX); e.preventDefault(); }
-        }, { passive: false });
-        document.addEventListener('mouseup', function () { dragging = false; });
-        document.addEventListener('touchend', function () { dragging = false; });
-    })();
 
     /* ── Export ── */
 
@@ -485,10 +414,8 @@
         });
     };
 
-    /* ── Drag and drop ── */
-
-    /* Click on drop overlay opens file picker */
-    dropOverlay.addEventListener('click', function () {
+    /* File picker for images/video (called from C drop overlay click) */
+    window.glifPickFile = function () {
         pickFile('image/*,video/*,.gif', async function (file) {
             if (file.type.startsWith('video/') || file.type === 'image/gif') {
                 startVideoFromFile(file);
@@ -504,7 +431,9 @@
                 img.src = originalImgSrc;
             }
         });
-    });
+    };
+
+    /* ── Drag and drop ── */
 
     canvasArea.addEventListener('dragover', function (e) { e.preventDefault(); });
     canvasArea.addEventListener('drop', async function (e) {
@@ -513,7 +442,8 @@
         if (!file) return;
 
         /* Dismiss comparison if active */
-        if (compareOn) glifToggleCompare(false);
+        if (compareOn && Module && Module._app_toggle_compare)
+            Module._app_toggle_compare();
 
         if (file.type.startsWith('video/') || file.type === 'image/gif') {
             if (originalImgSrc) { URL.revokeObjectURL(originalImgSrc); originalImgSrc = null; }
@@ -566,7 +496,6 @@
             hasContent = false;
             if (Module && Module._app_set_content_mode)
                 Module._app_set_content_mode(0, 0);
-            dropOverlay.classList.remove('hidden');
             requestAnimationFrame(function () { resize(); });
         } else if (hasContent) {
             showControls(false);

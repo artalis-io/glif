@@ -117,6 +117,8 @@ static struct {
     int export_format;       /* 0=PNG, 1=PPM, 2=SVG */
     int speed_idx;           /* 0-4, maps to 0.25/0.5/1/2/4x */
     int compare_on;          /* Compare toggle state */
+    int compare_dragging;    /* Currently dragging compare split */
+    int prev_mouse_buttons;  /* Previous frame's mouse buttons */
 } app;
 
 /* Compute cell dimensions from image size and resolution mode.
@@ -222,7 +224,7 @@ static void vp_render(const GlifGrid *grid, Clay_BoundingBox bounds) {
 
     vp_draw(&app.vp, cols, rows, vp_w, vp_h, app.hdr_intensity);
 
-    /* Store content rect in CSS logical pixels for JS overlay positioning */
+    /* Store content rect in CSS logical pixels for compare divider/drag */
     float grid_px_w = (float)cols * (float)app.vp.atlas_cell_w;
     float grid_px_h = (float)rows * (float)app.vp.atlas_cell_h;
     float sx = (float)vp_w / grid_px_w;
@@ -434,6 +436,20 @@ void app_set_dpr(float dpr) {
                         app.cell_w, app.cell_h, app.dpr);
 }
 
+/* Toggle compare mode and notify JS for image upload / cursor */
+static void toggle_compare_mode(void) {
+    if (!app.has_content) return;
+    app.compare_on = !app.compare_on;
+    app.vp.compare_mode = app.compare_on;
+    if (!app.compare_on) app.compare_dragging = 0;
+#ifdef __EMSCRIPTEN__
+    EM_ASM({
+        if (window.glifSetCursor) window.glifSetCursor($0 ? 'ew-resize' : null);
+        if (window.glifOnCompareToggle) window.glifOnCompareToggle($0);
+    }, app.compare_on);
+#endif
+}
+
 EMSCRIPTEN_KEEPALIVE
 void app_frame(void) {
     if (!app.initialized) return;
@@ -443,12 +459,35 @@ void app_frame(void) {
     int logical_h = (int)((float)app.canvas_h / app.dpr);
     if (logical_w <= 0 || logical_h <= 0) return;
 
-    /* Nuklear input */
+    /* Compare drag handling (uses previous frame's content rect) */
+    int mouse_down = (app.mouse_buttons & 1) != 0;
+    int prev_down = (app.prev_mouse_buttons & 1) != 0;
+    if (app.compare_on && app.has_content && app.content_w > 0) {
+        if (mouse_down && !prev_down && !app.compare_dragging) {
+            float mx = (float)app.mouse_x;
+            float my = (float)app.mouse_y;
+            if (mx >= app.content_x && mx <= app.content_x + app.content_w &&
+                my >= app.content_y && my <= app.content_y + app.content_h) {
+                app.compare_dragging = 1;
+            }
+        }
+        if (app.compare_dragging && mouse_down) {
+            float rel = ((float)app.mouse_x - app.content_x) / app.content_w;
+            if (rel < 0.0f) rel = 0.0f;
+            if (rel > 1.0f) rel = 1.0f;
+            app.vp.split_pos = rel;
+        }
+    }
+    if (!mouse_down) app.compare_dragging = 0;
+    app.prev_mouse_buttons = app.mouse_buttons;
+
+    /* Nuklear input (suppress during compare drag) */
     nk_input_begin(&app.nk);
-    nk_input_motion(&app.nk, app.mouse_x, app.mouse_y);
-    nk_input_button(&app.nk, NK_BUTTON_LEFT,
-                    app.mouse_x, app.mouse_y,
-                    (app.mouse_buttons & 1) != 0);
+    if (!app.compare_dragging) {
+        nk_input_motion(&app.nk, app.mouse_x, app.mouse_y);
+        nk_input_button(&app.nk, NK_BUTTON_LEFT,
+                        app.mouse_x, app.mouse_y, mouse_down);
+    }
     nk_input_end(&app.nk);
 
     /* Clay layout */
@@ -461,6 +500,20 @@ void app_frame(void) {
     Clay_RenderCommandArray commands = Clay_EndLayout();
     /* Get bounds AFTER EndLayout computes positions */
     ui_layout_get_bounds(&layout);
+
+    /* Drop overlay: click anywhere in viewport opens file picker */
+#ifdef __EMSCRIPTEN__
+    if (!app.has_content && mouse_down && !prev_down) {
+        float mx = (float)app.mouse_x;
+        float my = (float)app.mouse_y;
+        if (mx >= layout.viewport.x &&
+            mx < layout.viewport.x + layout.viewport.width &&
+            my >= layout.viewport.y &&
+            my < layout.viewport.y + layout.viewport.height) {
+            EM_ASM({ if (window.glifPickFile) window.glifPickFile(); });
+        }
+    }
+#endif
 
     /* Clear framebuffer */
     glViewport(0, 0, app.canvas_w, app.canvas_h);
@@ -662,16 +715,8 @@ void app_frame(void) {
                     app.hdr_intensity = app.hdr_intensity > 0.0f ? 0.0f : 1.0f;
 
                 /* Compare */
-#ifdef __EMSCRIPTEN__
-                if (toggle_button(&app.nk, "Cmp", app.compare_on)) {
-                    app.compare_on = !app.compare_on;
-                    EM_ASM({ if (window.glifToggleCompare) window.glifToggleCompare($0); },
-                           app.compare_on);
-                }
-#else
                 if (toggle_button(&app.nk, "Cmp", app.compare_on))
-                    app.compare_on = !app.compare_on;
-#endif
+                    toggle_compare_mode();
 
                 /* Format cycle */
                 {
@@ -715,16 +760,8 @@ void app_frame(void) {
                     app.hdr_intensity = app.hdr_intensity > 0.0f ? 0.0f : 1.0f;
 
                 /* Compare */
-#ifdef __EMSCRIPTEN__
-                if (toggle_button(&app.nk, "Cmp", app.compare_on)) {
-                    app.compare_on = !app.compare_on;
-                    EM_ASM({ if (window.glifToggleCompare) window.glifToggleCompare($0); },
-                           app.compare_on);
-                }
-#else
                 if (toggle_button(&app.nk, "Cmp", app.compare_on))
-                    app.compare_on = !app.compare_on;
-#endif
+                    toggle_compare_mode();
 
                 /* Format cycle */
                 {
@@ -755,6 +792,39 @@ void app_frame(void) {
 
         nk_style_pop_vec2(&app.nk);
         nk_style_pop_vec2(&app.nk);
+    }
+
+    /* Drop overlay (no content loaded) */
+    if (!app.has_content && layout.viewport.width > 0 && layout.viewport.height > 0) {
+        float ow = 420, oh = 54;
+        float ox = layout.viewport.x + (layout.viewport.width - ow) * 0.5f;
+        float oy = layout.viewport.y + (layout.viewport.height - oh) * 0.5f;
+        struct nk_rect drop_rect = nk_rect(ox, oy, ow, oh);
+        nk_window_set_bounds(&app.nk, "Drop", drop_rect);
+
+        nk_style_push_style_item(&app.nk, &app.nk.style.window.fixed_background,
+            nk_style_item_color(nk_rgba(0, 0, 0, 0)));
+        nk_style_push_vec2(&app.nk, &app.nk.style.window.padding, nk_vec2(0, 0));
+
+        if (nk_begin(&app.nk, "Drop", drop_rect,
+                     NK_WINDOW_NO_SCROLLBAR | NK_WINDOW_NO_INPUT)) {
+            nk_layout_row_dynamic(&app.nk, 20, 1);
+            nk_style_push_color(&app.nk, &app.nk.style.text.color,
+                                nk_rgb(102, 102, 102));
+            nk_label(&app.nk, "Drag & drop image or video", NK_TEXT_CENTERED);
+            nk_style_pop_color(&app.nk);
+
+            nk_layout_row_dynamic(&app.nk, 16, 1);
+            nk_style_push_color(&app.nk, &app.nk.style.text.color,
+                                nk_rgb(68, 68, 68));
+            nk_label(&app.nk, "S = export  F = fullscreen  Space = play/pause",
+                     NK_TEXT_CENTERED);
+            nk_style_pop_color(&app.nk);
+        }
+        nk_end(&app.nk);
+
+        nk_style_pop_vec2(&app.nk);
+        nk_style_pop_style_item(&app.nk);
     }
 
     /* Detect parameter changes and rebuild/reprocess as needed */
@@ -807,6 +877,56 @@ void app_frame(void) {
     /* Render ASCII art viewport */
     if (app.has_result && layout.viewport.width > 0) {
         vp_render(&app.grid, layout.viewport);
+    }
+
+    /* Compare divider (accent-blue vertical line) */
+    if (app.compare_on && app.has_result && app.content_w > 0) {
+        float div_x = app.content_x + app.vp.split_pos * app.content_w;
+        float dpr = app.dpr;
+        int px_w = (int)(3.0f * dpr);
+        int px_x = (int)(div_x * dpr) - px_w / 2;
+        int px_y = (int)((float)app.canvas_h -
+                         (app.content_y + app.content_h) * dpr);
+        int px_h = (int)(app.content_h * dpr);
+
+        glEnable(GL_SCISSOR_TEST);
+        glScissor(px_x, px_y, px_w, px_h);
+        glClearColor(74.0f / 255.0f, 158.0f / 255.0f, 255.0f / 255.0f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT);
+        glDisable(GL_SCISSOR_TEST);
+    }
+
+    /* Compare labels */
+    if (app.compare_on && app.has_result && app.content_w > 0) {
+        nk_style_push_style_item(&app.nk,
+            &app.nk.style.window.fixed_background,
+            nk_style_item_color(nk_rgba(0, 0, 0, 178)));
+        nk_style_push_vec2(&app.nk,
+            &app.nk.style.window.padding, nk_vec2(8, 3));
+
+        struct nk_rect lbl_l = nk_rect(
+            app.content_x + 8, app.content_y + 8, 72, 20);
+        nk_window_set_bounds(&app.nk, "CmpL", lbl_l);
+        if (nk_begin(&app.nk, "CmpL", lbl_l,
+                     NK_WINDOW_NO_SCROLLBAR | NK_WINDOW_NO_INPUT)) {
+            nk_layout_row_dynamic(&app.nk, 14, 1);
+            nk_label(&app.nk, "Original", NK_TEXT_LEFT);
+        }
+        nk_end(&app.nk);
+
+        struct nk_rect lbl_r = nk_rect(
+            app.content_x + app.content_w - 56 - 8,
+            app.content_y + 8, 56, 20);
+        nk_window_set_bounds(&app.nk, "CmpR", lbl_r);
+        if (nk_begin(&app.nk, "CmpR", lbl_r,
+                     NK_WINDOW_NO_SCROLLBAR | NK_WINDOW_NO_INPUT)) {
+            nk_layout_row_dynamic(&app.nk, 14, 1);
+            nk_label(&app.nk, "ASCII", NK_TEXT_LEFT);
+        }
+        nk_end(&app.nk);
+
+        nk_style_pop_vec2(&app.nk);
+        nk_style_pop_style_item(&app.nk);
     }
 
     /* Render Nuklear draw list (toolbar widgets) */
@@ -928,26 +1048,7 @@ const uint8_t *app_get_font_ptr(void) { return app.font_data; }
 EMSCRIPTEN_KEEPALIVE
 int app_get_font_len(void) { return app.font_len; }
 
-/* ── Content rect for JS overlay positioning ── */
-
-EMSCRIPTEN_KEEPALIVE
-void app_get_content_rect(float *out) {
-    out[0] = app.content_x;
-    out[1] = app.content_y;
-    out[2] = app.content_w;
-    out[3] = app.content_h;
-}
-
-/* ── Compare overlay API ── */
-
-EMSCRIPTEN_KEEPALIVE
-void app_set_compare(int mode, float split_pos) {
-    if (!app.initialized) return;
-    app.vp.compare_mode = mode;
-    if (split_pos < 0.0f) split_pos = 0.0f;
-    if (split_pos > 1.0f) split_pos = 1.0f;
-    app.vp.split_pos = split_pos;
-}
+/* ── Compare overlay (C-side owns state; JS no longer positions overlays) ── */
 
 EMSCRIPTEN_KEEPALIVE
 void app_upload_video_frame(const uint8_t *rgba, int w, int h) {
@@ -964,6 +1065,11 @@ EMSCRIPTEN_KEEPALIVE
 void app_set_content_mode(int has_content, int video_mode) {
     app.has_content = has_content;
     app.video_mode = video_mode;
+    if (!has_content && app.compare_on) {
+        app.compare_on = 0;
+        app.vp.compare_mode = 0;
+        app.compare_dragging = 0;
+    }
 }
 
 EMSCRIPTEN_KEEPALIVE
@@ -981,4 +1087,9 @@ EMSCRIPTEN_KEEPALIVE
 void app_toggle_hdr(void) {
     if (!app.has_content) return;
     app.hdr_intensity = app.hdr_intensity > 0.0f ? 0.0f : 1.0f;
+}
+
+EMSCRIPTEN_KEEPALIVE
+void app_toggle_compare(void) {
+    toggle_compare_mode();
 }
