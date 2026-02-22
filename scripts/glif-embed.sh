@@ -325,7 +325,7 @@ cat >> "$OUTPUT" << 'EMBED_EOF'
         var lastTime = 0;
         var accumulator = 0;
         var rafId = null;
-        var hdrOn = false;
+        var hdrOn = true;
 
         function formatTime(seconds) {
             var m = Math.floor(seconds / 60);
@@ -424,10 +424,11 @@ cat >> "$OUTPUT" << 'EMBED_EOF'
         var audioGainNode = null;
         var audioBuffer = null;     // decoded AudioBuffer from crushed PCM
         var audioSource = null;     // current AudioBufferSourceNode
-        var audioMuted = true;
+        var audioMuted = false;
 
         if (hasAudio) {
             audioBtn.style.display = '';
+            audioBtn.classList.add('active');
         }
 
         function buildAudioBuffer() {
@@ -435,7 +436,7 @@ cat >> "$OUTPUT" << 'EMBED_EOF'
             try {
                 audioCtx = new (window.AudioContext || window.webkitAudioContext)();
                 audioGainNode = audioCtx.createGain();
-                audioGainNode.gain.value = 0;
+                audioGainNode.gain.value = 1;
                 audioGainNode.connect(audioCtx.destination);
 
                 var pcmPtr = module._player_get_audio_pcm_ptr();
@@ -503,6 +504,10 @@ cat >> "$OUTPUT" << 'EMBED_EOF'
                 playerWrap.requestFullscreen().catch(function(){});
             }
         }
+
+        // Enable HDR by default
+        module._player_set_hdr(0.7);
+        hdrBtn.classList.add('active');
 
         // Size canvas and render first frame
         sizeCanvas();
