@@ -39,20 +39,33 @@ void glif_image_free(GlifImage *img) {
     img->pixels = NULL;
 }
 
-/* sRGB -> linear LUT: precomputed for all 256 byte values */
+/* sRGB -> linear LUT: precomputed for all 256 byte values.
+ * Uses CAS to ensure exactly one thread initializes the table. */
 static float srgb_lut[256];
-static atomic_int srgb_lut_ready = 0;
+static atomic_int srgb_lut_state = 0; /* 0=uninit, 1=in-progress, 2=ready */
 
 static void srgb_lut_init(void) {
-    if (atomic_load_explicit(&srgb_lut_ready, memory_order_acquire)) return;
-    for (int i = 0; i < 256; i++) {
-        float c = (float)i / 255.0f;
-        if (c <= 0.04045f)
-            srgb_lut[i] = c / 12.92f;
-        else
-            srgb_lut[i] = powf((c + 0.055f) / 1.055f, 2.4f);
+    int state = atomic_load_explicit(&srgb_lut_state, memory_order_acquire);
+    if (state == 2) return; /* fast path: already initialized */
+
+    int expected = 0;
+    if (atomic_compare_exchange_strong_explicit(&srgb_lut_state, &expected, 1,
+                                                memory_order_acq_rel,
+                                                memory_order_acquire)) {
+        /* Won the init race — compute LUT */
+        for (int i = 0; i < 256; i++) {
+            float c = (float)i / 255.0f;
+            if (c <= 0.04045f)
+                srgb_lut[i] = c / 12.92f;
+            else
+                srgb_lut[i] = powf((c + 0.055f) / 1.055f, 2.4f);
+        }
+        atomic_store_explicit(&srgb_lut_state, 2, memory_order_release);
+    } else {
+        /* Another thread is initializing — spin until done */
+        while (atomic_load_explicit(&srgb_lut_state, memory_order_acquire) != 2)
+            ;
     }
-    atomic_store_explicit(&srgb_lut_ready, 1, memory_order_release);
 }
 
 /* Recompute lightness values in-place (caller must provide pre-allocated lm->data).

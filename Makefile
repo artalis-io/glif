@@ -144,7 +144,7 @@ WASM_EXPORTS = '_app_init','_app_resize','_app_set_dpr','_app_frame','_app_mouse
 
 wasm: $(WASM_UI_SRC)
 	@mkdir -p web
-	emcc -std=gnu11 -O2 -msimd128 -Ivendor -Isrc \
+	emcc -std=gnu11 -O2 -Wall -Wextra -msimd128 -Ivendor -Isrc \
 	  -Isrc/platform/wasm \
 	  -s WASM=1 -s ALLOW_MEMORY_GROWTH=1 -s FULL_ES2=1 \
 	  -s MODULARIZE=1 -s EXPORT_NAME='createGlifModule' \
@@ -187,7 +187,7 @@ shared: $(SHARED_LIB)
 
 wasm-ext: $(WASM_EXT_SRC)
 	@mkdir -p extension/wasm
-	emcc -std=gnu11 -O2 -msimd128 -Ivendor -Isrc \
+	emcc -std=gnu11 -O2 -Wall -Wextra -msimd128 -Ivendor -Isrc \
 	  -Isrc/platform/wasm \
 	  -s WASM=1 -s ALLOW_MEMORY_GROWTH=1 -s FULL_ES2=1 \
 	  -s MODULARIZE=1 -s EXPORT_NAME='createGlifExt' \
@@ -213,7 +213,7 @@ WASM_PLAYER_EXPORTS = '_player_init','_player_load','_player_decode_frame', \
 
 wasm-player: $(WASM_PLAYER_SRC)
 	@mkdir -p web
-	emcc -std=gnu11 -O2 -Ivendor -Isrc \
+	emcc -std=gnu11 -O2 -Wall -Wextra -Ivendor -Isrc \
 	  -Isrc/platform/wasm \
 	  -s WASM=1 -s ALLOW_MEMORY_GROWTH=1 -s FULL_ES2=1 \
 	  -s MODULARIZE=1 -s EXPORT_NAME='createGlifPlayer' \

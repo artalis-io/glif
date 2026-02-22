@@ -14,9 +14,15 @@ int main(int argc, char **argv) {
     if (!f) { fprintf(stderr, "Cannot open %s\n", argv[1]); return 1; }
     fseek(f, 0, SEEK_END);
     long flen = ftell(f);
+    if (flen < 0) { fprintf(stderr, "ftell failed\n"); fclose(f); return 1; }
     rewind(f);
     uint8_t *buf = malloc((size_t)flen);
-    fread(buf, 1, (size_t)flen, f);
+    if (fread(buf, 1, (size_t)flen, f) != (size_t)flen) {
+        fprintf(stderr, "fread failed\n");
+        free(buf);
+        fclose(f);
+        return 1;
+    }
     fclose(f);
 
     GlifReader gr;
@@ -72,7 +78,16 @@ int main(int argc, char **argv) {
     printf("Decoded %u frames, %d errors\n", hdr->frames, errors);
 
     /* Dump a specific frame if requested */
-    int dump = argc > 2 ? atoi(argv[2]) : 0;
+    int dump = 0;
+    if (argc > 2) {
+        char *endptr;
+        long val = strtol(argv[2], &endptr, 10);
+        if (*endptr != '\0' || val < 0 || val >= (long)hdr->frames) {
+            dump = val < 0 ? 0 : (val >= (long)hdr->frames ? (int)hdr->frames - 1 : (int)val);
+        } else {
+            dump = (int)val;
+        }
+    }
     if (glif_reader_decode(&gr, (uint32_t)dump) == 0) {
         const uint8_t *data = glif_reader_frame_data(&gr);
         printf("\nFrame %d (type=%d), first 40 cells:\n", dump, gr.index[dump].type);

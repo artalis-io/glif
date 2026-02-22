@@ -135,7 +135,7 @@ int player_load(const uint8_t *data, int len) {
 
 EMSCRIPTEN_KEEPALIVE
 int player_decode_frame(int frame) {
-    if (!player.loaded) return -1;
+    if (!player.loaded || frame < 0) return -1;
 
     if (glif_reader_decode(&player.reader, (uint32_t)frame) != 0)
         return -1;

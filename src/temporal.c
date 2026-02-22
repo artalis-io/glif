@@ -5,8 +5,22 @@
 
 /* ── Quickselect (copied from contrast.c — static there) ── */
 
+/* NaN values are moved to the end to prevent infinite loops. */
 static float quickselect(float *arr, int n, int k) {
-    int lo = 0, hi = n - 1;
+    /* Filter NaN to end */
+    int valid = n;
+    for (int i = 0; i < valid; ) {
+        if (arr[i] != arr[i]) { /* NaN */
+            valid--;
+            arr[i] = arr[valid];
+        } else {
+            i++;
+        }
+    }
+    if (valid == 0) return 0.0f;
+    if (k >= valid) k = valid - 1;
+
+    int lo = 0, hi = valid - 1;
     while (lo < hi) {
         float pivot = arr[lo + (hi - lo) / 2];
         int i = lo, j = hi;

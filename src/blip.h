@@ -31,5 +31,7 @@ void blip_encoder_free(BlipEncoder *be);
 /* Access crushed PCM data */
 const uint8_t *blip_encoder_data(const BlipEncoder *be);
 uint32_t blip_encoder_samples(const BlipEncoder *be);
+int blip_encoder_bit_depth(const BlipEncoder *be);
+int blip_encoder_dst_rate(const BlipEncoder *be);
 
 #endif
