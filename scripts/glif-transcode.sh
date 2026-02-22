@@ -194,6 +194,11 @@ TMPDIR=$(mktemp -d)
 trap 'rm -rf "$TMPDIR"' EXIT
 TMP_VIDEO="$TMPDIR/video.mp4"
 
+# Auto-enable blip audio when --output-glif is used and input has audio
+if [ -n "$GLIF_OUTPUT" ] && [ -n "$HAS_AUDIO" ]; then
+    BLIP_AUDIO=1
+fi
+
 # Extract audio as raw PCM if blip audio encoding is requested
 AUDIO_FLAGS=""
 if [ "$BLIP_AUDIO" -eq 1 ] && [ -n "$HAS_AUDIO" ]; then
