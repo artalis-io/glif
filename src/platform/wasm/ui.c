@@ -1,5 +1,6 @@
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 #include <math.h>
 
 #ifdef __EMSCRIPTEN__
@@ -102,6 +103,20 @@ static struct {
     int prev_adaptive_on;
     int prev_hi_res;
     int prev_stabilize;
+
+    /* Media bar state */
+    int has_content;         /* Content loaded (image or video) */
+    int video_mode;          /* 1 = video, 0 = image */
+    int playing;             /* Video is currently playing */
+    float current_time;      /* Current playback position (seconds) */
+    float duration;          /* Total duration (seconds) */
+    int audio_available;     /* Video has an audio track */
+    int audio_muted;         /* Audio is muted */
+    int seeking;             /* User is dragging progress slider */
+    float hdr_intensity;     /* 0.0 = off, 1.0 = full HDR */
+    int export_format;       /* 0=PNG, 1=PPM, 2=SVG */
+    int speed_idx;           /* 0-4, maps to 0.25/0.5/1/2/4x */
+    int compare_on;          /* Compare toggle state */
 } app;
 
 /* Compute cell dimensions from image size and resolution mode.
@@ -115,6 +130,57 @@ static void compute_cell_size(int img_w, int img_h, int hi_res,
     int ch = cw * 2;
     *out_cw = cw;
     *out_ch = ch;
+}
+
+/* Speed table: index → playback rate */
+static const float speed_table[] = { 0.25f, 0.5f, 1.0f, 2.0f, 4.0f };
+#define SPEED_COUNT 5
+
+/* Format time as "M:SS" into buf */
+static void format_time(char *buf, int len, float seconds) {
+    int s = (int)seconds;
+    if (s < 0) s = 0;
+    int m = s / 60;
+    int ss = s % 60;
+    snprintf(buf, (size_t)len, "%d:%02d", m, ss);
+}
+
+/* Styled toggle button: push accent color when active */
+static int toggle_button(struct nk_context *nk, const char *label, int active) {
+    if (active) {
+        nk_style_push_color(nk, &nk->style.button.text_normal,
+                            nk_rgb(74, 158, 255));
+        nk_style_push_color(nk, &nk->style.button.text_hover,
+                            nk_rgb(74, 158, 255));
+        nk_style_push_color(nk, &nk->style.button.text_active,
+                            nk_rgb(74, 158, 255));
+    }
+    int clicked = nk_button_label(nk, label);
+    if (active) {
+        nk_style_pop_color(nk);
+        nk_style_pop_color(nk);
+        nk_style_pop_color(nk);
+    }
+    return clicked;
+}
+
+/* Styled toggle button using a symbol icon */
+static int toggle_button_symbol(struct nk_context *nk, enum nk_symbol_type sym, int active) {
+    if (active) {
+        nk_style_push_color(nk, &nk->style.button.text_normal,
+                            nk_rgb(74, 158, 255));
+        nk_style_push_color(nk, &nk->style.button.text_hover,
+                            nk_rgb(74, 158, 255));
+        nk_style_push_color(nk, &nk->style.button.text_active,
+                            nk_rgb(74, 158, 255));
+    }
+    int clicked = nk_button_symbol(nk, sym);
+    if (active) {
+        nk_style_pop_color(nk);
+        nk_style_pop_color(nk);
+        nk_style_pop_color(nk);
+    }
+    return clicked;
 }
 
 /* Upload GlifGrid char/color data and render within Clay bounds */
@@ -154,7 +220,7 @@ static void vp_render(const GlifGrid *grid, Clay_BoundingBox bounds) {
     glScissor(vp_x, vp_y, vp_w, vp_h);
     glViewport(vp_x, vp_y, vp_w, vp_h);
 
-    vp_draw(&app.vp, cols, rows, vp_w, vp_h, 0.0f);
+    vp_draw(&app.vp, cols, rows, vp_w, vp_h, app.hdr_intensity);
 
     /* Store content rect in CSS logical pixels for JS overlay positioning */
     float grid_px_w = (float)cols * (float)app.vp.atlas_cell_w;
@@ -269,6 +335,8 @@ void app_init(float dpr, int canvas_w, int canvas_h) {
     app.stabilize = 1;
     app.adaptive.floor = 5.0f / 255.0f;
     app.adaptive.ceil = 80.0f / 255.0f;
+    app.speed_idx = 2; /* 1x */
+    app.audio_muted = 1;
 
 #ifdef __EMSCRIPTEN__
     /* Create Emscripten WebGL context on the canvas */
@@ -388,7 +456,8 @@ void app_frame(void) {
                          (app.mouse_buttons & 1) != 0);
     Clay_BeginLayout();
     UiLayout layout;
-    ui_layout_build(&layout, logical_w, logical_h);
+    ui_layout_build(&layout, logical_w, logical_h,
+                    app.has_content, app.video_mode);
     Clay_RenderCommandArray commands = Clay_EndLayout();
     /* Get bounds AFTER EndLayout computes positions */
     ui_layout_get_bounds(&layout);
@@ -481,6 +550,204 @@ void app_frame(void) {
                     EM_ASM({ if (window.glifToggleCamera) window.glifToggleCamera(); });
 #else
                 nk_button_label(&app.nk, "Webcam");
+#endif
+            }
+        }
+        nk_end(&app.nk);
+
+        nk_style_pop_vec2(&app.nk);
+        nk_style_pop_vec2(&app.nk);
+    }
+
+    /* Nuklear media bar */
+    if (app.has_content && layout.media_bar.width > 0 && layout.media_bar.height > 0) {
+        struct nk_rect mb = nk_rect(layout.media_bar.x, layout.media_bar.y,
+                                    layout.media_bar.width, layout.media_bar.height);
+        nk_window_set_bounds(&app.nk, "MediaBar", mb);
+
+        nk_style_push_vec2(&app.nk, &app.nk.style.window.padding,
+                           nk_vec2(8, 6));
+        nk_style_push_vec2(&app.nk, &app.nk.style.window.spacing,
+                           nk_vec2(4, 0));
+
+        if (nk_begin(&app.nk, "MediaBar", mb, NK_WINDOW_NO_SCROLLBAR)) {
+            if (app.video_mode) {
+                /* Video mode: Play | Time | Progress | Speed | Audio | HDR | Cmp | Fmt | Exp | Full */
+                nk_layout_row_template_begin(&app.nk, 28);
+                nk_layout_row_template_push_static(&app.nk, 36);   /* Play */
+                nk_layout_row_template_push_static(&app.nk, 80);   /* Time */
+                nk_layout_row_template_push_dynamic(&app.nk);       /* Progress */
+                nk_layout_row_template_push_static(&app.nk, 40);   /* Speed */
+                if (app.audio_available)
+                    nk_layout_row_template_push_static(&app.nk, 36); /* Audio */
+                nk_layout_row_template_push_static(&app.nk, 36);   /* HDR */
+                nk_layout_row_template_push_static(&app.nk, 36);   /* Cmp */
+                nk_layout_row_template_push_static(&app.nk, 40);   /* Fmt */
+                nk_layout_row_template_push_static(&app.nk, 36);   /* Exp */
+                nk_layout_row_template_push_static(&app.nk, 36);   /* Full */
+                nk_layout_row_template_end(&app.nk);
+
+                /* Play/Pause */
+#ifdef __EMSCRIPTEN__
+                if (nk_button_symbol(&app.nk, app.playing
+                        ? NK_SYMBOL_RECT_SOLID : NK_SYMBOL_TRIANGLE_RIGHT))
+                    EM_ASM({ if (window.glifPlayPause) window.glifPlayPause(); });
+#else
+                nk_button_symbol(&app.nk, app.playing
+                    ? NK_SYMBOL_RECT_SOLID : NK_SYMBOL_TRIANGLE_RIGHT);
+#endif
+
+                /* Time display */
+                char time_buf[32];
+                char cur_buf[12], dur_buf[12];
+                format_time(cur_buf, sizeof(cur_buf), app.current_time);
+                format_time(dur_buf, sizeof(dur_buf), app.duration);
+                snprintf(time_buf, sizeof(time_buf), "%s/%s", cur_buf, dur_buf);
+                nk_label(&app.nk, time_buf, NK_TEXT_CENTERED);
+
+                /* Progress slider */
+                float progress = app.duration > 0.0f
+                    ? app.current_time / app.duration : 0.0f;
+                float old_progress = progress;
+                nk_slider_float(&app.nk, 0.0f, &progress, 1.0f, 0.001f);
+                if (progress != old_progress) {
+                    app.seeking = 1;
+#ifdef __EMSCRIPTEN__
+                    float seek_time = progress * app.duration;
+                    EM_ASM({ if (window.glifSeek) window.glifSeek($0); },
+                           (double)seek_time);
+#endif
+                } else if (app.seeking && !(app.mouse_buttons & 1)) {
+                    app.seeking = 0;
+                }
+
+                /* Speed */
+                {
+                    char spd[8];
+                    if (speed_table[app.speed_idx] < 1.0f)
+                        snprintf(spd, sizeof(spd), "%.2gx",
+                                 (double)speed_table[app.speed_idx]);
+                    else
+                        snprintf(spd, sizeof(spd), "%.0fx",
+                                 (double)speed_table[app.speed_idx]);
+                    if (nk_button_label(&app.nk, spd)) {
+                        app.speed_idx = (app.speed_idx + 1) % SPEED_COUNT;
+#ifdef __EMSCRIPTEN__
+                        EM_ASM({ if (window.glifSetSpeed) window.glifSetSpeed($0); },
+                               (double)speed_table[app.speed_idx]);
+#endif
+                    }
+                }
+
+                /* Audio (conditional) */
+                if (app.audio_available) {
+#ifdef __EMSCRIPTEN__
+                    if (app.audio_muted) {
+                        if (nk_button_symbol(&app.nk, NK_SYMBOL_X))
+                            EM_ASM({ if (window.glifToggleAudio) window.glifToggleAudio(); });
+                    } else {
+                        if (toggle_button_symbol(&app.nk, NK_SYMBOL_CIRCLE_SOLID, 1))
+                            EM_ASM({ if (window.glifToggleAudio) window.glifToggleAudio(); });
+                    }
+#else
+                    if (app.audio_muted)
+                        nk_button_symbol(&app.nk, NK_SYMBOL_X);
+                    else
+                        toggle_button_symbol(&app.nk, NK_SYMBOL_CIRCLE_SOLID, 1);
+#endif
+                }
+
+                /* HDR */
+                if (toggle_button(&app.nk, "HDR", app.hdr_intensity > 0.0f))
+                    app.hdr_intensity = app.hdr_intensity > 0.0f ? 0.0f : 1.0f;
+
+                /* Compare */
+#ifdef __EMSCRIPTEN__
+                if (toggle_button(&app.nk, "Cmp", app.compare_on)) {
+                    app.compare_on = !app.compare_on;
+                    EM_ASM({ if (window.glifToggleCompare) window.glifToggleCompare($0); },
+                           app.compare_on);
+                }
+#else
+                if (toggle_button(&app.nk, "Cmp", app.compare_on))
+                    app.compare_on = !app.compare_on;
+#endif
+
+                /* Format cycle */
+                {
+                    const char *fmt_labels[] = { "PNG", "PPM", "SVG" };
+                    if (nk_button_label(&app.nk, fmt_labels[app.export_format]))
+                        app.export_format = (app.export_format + 1) % 3;
+                }
+
+                /* Export */
+#ifdef __EMSCRIPTEN__
+                if (nk_button_symbol(&app.nk, NK_SYMBOL_TRIANGLE_DOWN))
+                    EM_ASM({ if (window.glifExport) window.glifExport($0); },
+                           app.export_format);
+#else
+                nk_button_symbol(&app.nk, NK_SYMBOL_TRIANGLE_DOWN);
+#endif
+
+                /* Fullscreen */
+#ifdef __EMSCRIPTEN__
+                if (nk_button_symbol(&app.nk, NK_SYMBOL_RECT_OUTLINE))
+                    EM_ASM({ if (window.glifToggleFullscreen) window.glifToggleFullscreen(); });
+#else
+                nk_button_symbol(&app.nk, NK_SYMBOL_RECT_OUTLINE);
+#endif
+            } else {
+                /* Image mode: spacer | HDR | Cmp | Fmt | Exp | Full */
+                nk_layout_row_template_begin(&app.nk, 28);
+                nk_layout_row_template_push_dynamic(&app.nk);       /* spacer */
+                nk_layout_row_template_push_static(&app.nk, 40);   /* HDR */
+                nk_layout_row_template_push_static(&app.nk, 40);   /* Cmp */
+                nk_layout_row_template_push_static(&app.nk, 40);   /* Fmt */
+                nk_layout_row_template_push_static(&app.nk, 40);   /* Exp */
+                nk_layout_row_template_push_static(&app.nk, 40);   /* Full */
+                nk_layout_row_template_end(&app.nk);
+
+                /* Spacer */
+                nk_label(&app.nk, "", NK_TEXT_LEFT);
+
+                /* HDR */
+                if (toggle_button(&app.nk, "HDR", app.hdr_intensity > 0.0f))
+                    app.hdr_intensity = app.hdr_intensity > 0.0f ? 0.0f : 1.0f;
+
+                /* Compare */
+#ifdef __EMSCRIPTEN__
+                if (toggle_button(&app.nk, "Cmp", app.compare_on)) {
+                    app.compare_on = !app.compare_on;
+                    EM_ASM({ if (window.glifToggleCompare) window.glifToggleCompare($0); },
+                           app.compare_on);
+                }
+#else
+                if (toggle_button(&app.nk, "Cmp", app.compare_on))
+                    app.compare_on = !app.compare_on;
+#endif
+
+                /* Format cycle */
+                {
+                    const char *fmt_labels[] = { "PNG", "PPM", "SVG" };
+                    if (nk_button_label(&app.nk, fmt_labels[app.export_format]))
+                        app.export_format = (app.export_format + 1) % 3;
+                }
+
+                /* Export */
+#ifdef __EMSCRIPTEN__
+                if (nk_button_symbol(&app.nk, NK_SYMBOL_TRIANGLE_DOWN))
+                    EM_ASM({ if (window.glifExport) window.glifExport($0); },
+                           app.export_format);
+#else
+                nk_button_symbol(&app.nk, NK_SYMBOL_TRIANGLE_DOWN);
+#endif
+
+                /* Fullscreen */
+#ifdef __EMSCRIPTEN__
+                if (nk_button_symbol(&app.nk, NK_SYMBOL_RECT_OUTLINE))
+                    EM_ASM({ if (window.glifToggleFullscreen) window.glifToggleFullscreen(); });
+#else
+                nk_button_symbol(&app.nk, NK_SYMBOL_RECT_OUTLINE);
 #endif
             }
         }
@@ -689,4 +956,29 @@ void app_upload_video_frame(const uint8_t *rgba, int w, int h) {
     glBindTexture(GL_TEXTURE_2D, app.vp.video_tex);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0,
                  GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+}
+
+/* ── Media bar state (called from JS) ── */
+
+EMSCRIPTEN_KEEPALIVE
+void app_set_content_mode(int has_content, int video_mode) {
+    app.has_content = has_content;
+    app.video_mode = video_mode;
+}
+
+EMSCRIPTEN_KEEPALIVE
+void app_set_media_state(int playing, float current_time, float duration,
+                         int audio_available, int audio_muted) {
+    app.playing = playing;
+    if (!app.seeking)
+        app.current_time = current_time;
+    app.duration = duration;
+    app.audio_available = audio_available;
+    app.audio_muted = audio_muted;
+}
+
+EMSCRIPTEN_KEEPALIVE
+void app_toggle_hdr(void) {
+    if (!app.has_content) return;
+    app.hdr_intensity = app.hdr_intensity > 0.0f ? 0.0f : 1.0f;
 }

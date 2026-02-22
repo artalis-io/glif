@@ -150,6 +150,7 @@ WASM_EXPORTS = '_app_init','_app_resize','_app_set_dpr','_app_frame','_app_mouse
                '_app_get_grid_rows','_app_get_grid_cols','_app_get_grid_cell_w','_app_get_grid_cell_h', \
                '_app_export_grid','_app_get_font_ptr','_app_get_font_len', \
                '_app_set_compare','_app_upload_video_frame','_app_get_content_rect', \
+               '_app_set_content_mode','_app_set_media_state','_app_toggle_hdr', \
                '_malloc','_free'
 
 wasm: $(WASM_UI_SRC)

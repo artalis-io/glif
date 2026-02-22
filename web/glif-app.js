@@ -2,8 +2,12 @@
  * Glif App — Minimal JS bridge for browser APIs.
  *
  * Forwards mouse/touch/keyboard events to the C UI module,
- * handles file picking, webcam, video playback controls,
- * export (PNG/PPM/SVG), HDR, comparison, and DPR-aware canvas sizing.
+ * handles file picking, webcam, video playback, export (PNG/PPM/SVG),
+ * comparison, and DPR-aware canvas sizing.
+ *
+ * The bottom media bar (HDR, compare, export, playback controls) is
+ * rendered in C via Clay/Nuklear. JS provides global callback functions
+ * that C calls via EM_ASM when buttons are pressed.
  */
 (function () {
     'use strict';
@@ -15,20 +19,6 @@
     const compareDivider = document.getElementById('compareDivider');
     const compareLabelL = document.getElementById('compareLabelL');
     const compareLabelR = document.getElementById('compareLabelR');
-    const controls = document.getElementById('controls');
-    const playPauseBtn = document.getElementById('playPause');
-    const iconPlay = document.getElementById('iconPlay');
-    const iconPause = document.getElementById('iconPause');
-    const timeDisplay = document.getElementById('timeDisplay');
-    const progressWrap = document.getElementById('progressWrap');
-    const progressFill = document.getElementById('progressFill');
-    const speedSel = document.getElementById('speed');
-    const audioBtn = document.getElementById('audioBtn');
-    const hdrBtn = document.getElementById('hdrBtn');
-    const compareBtn = document.getElementById('compareBtn');
-    const exportFormat = document.getElementById('exportFormat');
-    const exportBtn = document.getElementById('exportBtn');
-    const fullscreenBtn = document.getElementById('fullscreenBtn');
 
     let Module = null;
     let cameras = [];
@@ -39,10 +29,10 @@
     let lastDpr = 0;
     let isVideoMode = false;
     let hasContent = false;
-    let hdrOn = false;
     let compareOn = false;
     let sliderX = 0.5;
     let audioMuted = true;
+    let audioAvailable = false;
     let originalImgSrc = null; /* URL for comparison of dropped images */
 
     /* ── DPR + resize ── */
@@ -76,46 +66,16 @@
     }
     watchDpr();
 
-    /* ── Control bar show/hide ── */
+    /* ── Content mode (replaces old showControls) ── */
 
     function showControls(videoMode) {
         isVideoMode = videoMode;
         hasContent = true;
-        controls.classList.remove('hidden');
         dropOverlay.classList.add('hidden');
-        if (videoMode) {
-            controls.classList.remove('image-mode');
-        } else {
-            controls.classList.add('image-mode');
+        if (Module && Module._app_set_content_mode) {
+            Module._app_set_content_mode(1, videoMode ? 1 : 0);
         }
         requestAnimationFrame(function () { resize(); });
-    }
-
-    /* ── Video playback UI helpers ── */
-
-    function formatTime(seconds) {
-        var m = Math.floor(seconds / 60);
-        var s = Math.floor(seconds % 60);
-        return m + ':' + (s < 10 ? '0' : '') + s;
-    }
-
-    function syncPlayIcon() {
-        if (videoEl && !videoEl.paused) {
-            iconPlay.style.display = 'none';
-            iconPause.style.display = '';
-        } else {
-            iconPlay.style.display = '';
-            iconPause.style.display = 'none';
-        }
-    }
-
-    function updateVideoUI() {
-        if (!videoEl || !isVideoMode) return;
-        var cur = videoEl.currentTime;
-        var dur = videoEl.duration || 0;
-        if (!isFinite(dur)) dur = 0;
-        timeDisplay.textContent = formatTime(cur) + ' / ' + formatTime(dur);
-        progressFill.style.width = dur > 0 ? ((cur / dur) * 100) + '%' : '0%';
     }
 
     /* ── Mouse events ── */
@@ -165,48 +125,34 @@
 
         switch (e.key) {
             case 's': case 'S':
-                doExport();
+                if (hasContent) doExport();
                 break;
             case 'f': case 'F':
                 toggleFullscreen();
                 break;
             case 'h': case 'H':
-                toggleHDR();
+                if (Module && Module._app_toggle_hdr) Module._app_toggle_hdr();
                 break;
             case 'c': case 'C':
-                toggleCompare();
+                glifToggleCompare(!compareOn);
                 break;
             case 'a': case 'A':
-                if (isVideoMode) toggleAudio();
+                if (isVideoMode) glifToggleAudio();
                 break;
             case ' ':
                 if (isVideoMode) {
                     e.preventDefault();
-                    togglePlayPause();
+                    glifPlayPause();
                 }
                 break;
             case 'ArrowLeft':
                 if (isVideoMode && videoEl) {
                     videoEl.currentTime = Math.max(0, videoEl.currentTime - 5);
-                    updateVideoUI();
                 }
                 break;
             case 'ArrowRight':
                 if (isVideoMode && videoEl) {
                     videoEl.currentTime = Math.min(videoEl.duration || 0, videoEl.currentTime + 5);
-                    updateVideoUI();
-                }
-                break;
-            case 'ArrowUp':
-                if (isVideoMode) {
-                    e.preventDefault();
-                    cycleSpeed(1);
-                }
-                break;
-            case 'ArrowDown':
-                if (isVideoMode) {
-                    e.preventDefault();
-                    cycleSpeed(-1);
                 }
                 break;
         }
@@ -215,16 +161,64 @@
         if (Module) Module._app_key(e.keyCode, 0);
     });
 
-    /* ── HDR (CSS filter) ── */
+    /* ── Global callbacks (called from C via EM_ASM) ── */
 
-    function toggleHDR() {
-        if (!hasContent) return;
-        hdrOn = !hdrOn;
-        canvas.style.filter = hdrOn ? 'contrast(1.2) saturate(1.3)' : '';
-        hdrBtn.classList.toggle('active', hdrOn);
+    function glifPlayPause() {
+        if (!videoEl || !isVideoMode) return;
+        if (videoEl.paused) videoEl.play();
+        else videoEl.pause();
     }
+    window.glifPlayPause = glifPlayPause;
 
-    hdrBtn.addEventListener('click', toggleHDR);
+    window.glifSeek = function (t) {
+        if (!videoEl) return;
+        videoEl.currentTime = t;
+    };
+
+    window.glifSetSpeed = function (rate) {
+        if (!videoEl) return;
+        videoEl.playbackRate = rate;
+    };
+
+    function glifToggleAudio() {
+        if (!videoEl || !isVideoMode) return;
+        audioMuted = !audioMuted;
+        videoEl.muted = audioMuted;
+    }
+    window.glifToggleAudio = glifToggleAudio;
+
+    function glifToggleCompare(on) {
+        if (!hasContent || !Module) return;
+        compareOn = !!on;
+        canvasArea.classList.toggle('compare-active', compareOn);
+        compareDivider.style.display = compareOn ? 'block' : 'none';
+        compareLabelL.style.display = compareOn ? 'block' : 'none';
+        compareLabelR.style.display = compareOn ? 'block' : 'none';
+        Module._app_set_compare(compareOn ? 1 : 0, sliderX);
+        if (compareOn) {
+            if (!isVideoMode) uploadImageForCompare();
+            sizeCompare();
+        }
+    }
+    window.glifToggleCompare = glifToggleCompare;
+
+    window.glifExport = function (fmtIdx) {
+        if (!hasContent) return;
+        if (fmtIdx === 1) exportPPM();
+        else if (fmtIdx === 2) exportSVG();
+        else exportPNG();
+    };
+
+    function toggleFullscreen() {
+        if (document.fullscreenElement) {
+            document.exitFullscreen();
+        } else {
+            appWrap.requestFullscreen().catch(function () {});
+        }
+    }
+    window.glifToggleFullscreen = toggleFullscreen;
+
+    document.addEventListener('fullscreenchange', function () { resize(); });
 
     /* ── Comparison (WebGL split) ── */
 
@@ -273,23 +267,6 @@
         img.src = originalImgSrc;
     }
 
-    function toggleCompare() {
-        if (!hasContent || !Module) return;
-        compareOn = !compareOn;
-        compareBtn.classList.toggle('active', compareOn);
-        canvasArea.classList.toggle('compare-active', compareOn);
-        compareDivider.style.display = compareOn ? 'block' : 'none';
-        compareLabelL.style.display = compareOn ? 'block' : 'none';
-        compareLabelR.style.display = compareOn ? 'block' : 'none';
-        Module._app_set_compare(compareOn ? 1 : 0, sliderX);
-        if (compareOn) {
-            if (!isVideoMode) uploadImageForCompare();
-            sizeCompare();
-        }
-    }
-
-    compareBtn.addEventListener('click', toggleCompare);
-
     /* Draggable split: click/drag on canvasArea moves split position */
     (function () {
         var dragging = false;
@@ -305,14 +282,29 @@
         }
         canvasArea.addEventListener('mousedown', function (e) {
             if (!compareOn) return;
+            var cr = getContentRect();
+            if (!cr || cr.w <= 0) return;
+            var cRect = canvas.getBoundingClientRect();
+            var relX = e.clientX - cRect.left;
+            var relY = e.clientY - cRect.top;
+            if (relX < cr.x || relX > cr.x + cr.w ||
+                relY < cr.y || relY > cr.y + cr.h) return;
             dragging = true;
             updateSplit(e.clientX);
             e.preventDefault();
         });
         canvasArea.addEventListener('touchstart', function (e) {
             if (!compareOn) return;
+            var cr = getContentRect();
+            if (!cr || cr.w <= 0) return;
+            var cRect = canvas.getBoundingClientRect();
+            var t = e.touches[0];
+            var relX = t.clientX - cRect.left;
+            var relY = t.clientY - cRect.top;
+            if (relX < cr.x || relX > cr.x + cr.w ||
+                relY < cr.y || relY > cr.y + cr.h) return;
             dragging = true;
-            updateSplit(e.touches[0].clientX);
+            updateSplit(t.clientX);
             e.preventDefault();
         }, { passive: false });
         document.addEventListener('mousemove', function (e) { if (dragging) updateSplit(e.clientX); });
@@ -322,17 +314,6 @@
         document.addEventListener('mouseup', function () { dragging = false; });
         document.addEventListener('touchend', function () { dragging = false; });
     })();
-
-    /* ── Audio ── */
-
-    function toggleAudio() {
-        if (!videoEl || !isVideoMode) return;
-        audioMuted = !audioMuted;
-        videoEl.muted = audioMuted;
-        audioBtn.classList.toggle('active', !audioMuted);
-    }
-
-    audioBtn.addEventListener('click', toggleAudio);
 
     /* ── Export ── */
 
@@ -476,65 +457,9 @@
     }
 
     function doExport() {
-        if (!hasContent) return;
-        var fmt = exportFormat.value;
-        if (fmt === 'ppm') exportPPM();
-        else if (fmt === 'svg') exportSVG();
-        else exportPNG();
-    }
-
-    exportBtn.addEventListener('click', doExport);
-
-    /* ── Fullscreen ── */
-
-    function toggleFullscreen() {
-        if (document.fullscreenElement) {
-            document.exitFullscreen();
-        } else {
-            appWrap.requestFullscreen().catch(function () {});
-        }
-    }
-
-    fullscreenBtn.addEventListener('click', toggleFullscreen);
-    document.addEventListener('fullscreenchange', function () { resize(); });
-
-    /* ── Video play/pause ── */
-
-    function togglePlayPause() {
-        if (!videoEl || !isVideoMode) return;
-        if (videoEl.paused) {
-            videoEl.play();
-        } else {
-            videoEl.pause();
-        }
-        syncPlayIcon();
-    }
-
-    playPauseBtn.addEventListener('click', togglePlayPause);
-
-    /* ── Progress bar seek ── */
-
-    progressWrap.addEventListener('click', function (e) {
-        if (!videoEl || !isVideoMode) return;
-        var rect = progressWrap.getBoundingClientRect();
-        var pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-        videoEl.currentTime = pct * (videoEl.duration || 0);
-        updateVideoUI();
-    });
-
-    /* ── Speed control ── */
-
-    speedSel.addEventListener('change', function () {
-        if (videoEl) videoEl.playbackRate = parseFloat(speedSel.value);
-    });
-
-    function cycleSpeed(dir) {
-        var opts = speedSel.options;
-        var idx = speedSel.selectedIndex + dir;
-        if (idx < 0) idx = 0;
-        if (idx >= opts.length) idx = opts.length - 1;
-        speedSel.selectedIndex = idx;
-        if (videoEl) videoEl.playbackRate = parseFloat(speedSel.value);
+        /* C-side export_format not readable from JS; just export PNG by default
+           for keyboard shortcut. C-side buttons call glifExport(fmtIdx). */
+        exportPNG();
     }
 
     /* ── File picking (triggered from C via EM_ASM) ── */
@@ -588,7 +513,7 @@
         if (!file) return;
 
         /* Dismiss comparison if active */
-        if (compareOn) toggleCompare();
+        if (compareOn) glifToggleCompare(false);
 
         if (file.type.startsWith('video/') || file.type === 'image/gif') {
             if (originalImgSrc) { URL.revokeObjectURL(originalImgSrc); originalImgSrc = null; }
@@ -634,12 +559,13 @@
         if (videoAnimId) { cancelAnimationFrame(videoAnimId); videoAnimId = null; }
         if (videoStream) { videoStream.getTracks().forEach(function (t) { t.stop(); }); videoStream = null; }
         if (videoEl) { videoEl.pause(); videoEl.remove(); videoEl = null; }
-        audioBtn.style.display = 'none';
+        audioAvailable = false;
         isVideoMode = false;
         /* If webcam was the only content, go back to drop overlay */
         if (wasCamera && !originalImgSrc) {
             hasContent = false;
-            controls.classList.add('hidden');
+            if (Module && Module._app_set_content_mode)
+                Module._app_set_content_mode(0, 0);
             dropOverlay.classList.remove('hidden');
             requestAnimationFrame(function () { resize(); });
         } else if (hasContent) {
@@ -660,19 +586,17 @@
             videoEl.srcObject = source;
             videoStream = source;
             videoEl.muted = true;
+            audioAvailable = false;
         } else {
             videoEl.src = source;
             videoEl.loop = true;
             videoEl.muted = audioMuted;
-            /* Show audio button for file-based video */
-            audioBtn.style.display = '';
-            audioBtn.classList.toggle('active', !audioMuted);
+            audioAvailable = true;
         }
         videoEl.play();
 
         if (!isCamera) {
             showControls(true);
-            syncPlayIcon();
         } else {
             showControls(false);
         }
@@ -680,7 +604,7 @@
         const offscreen = document.createElement('canvas');
         const ctx = offscreen.getContext('2d', { willReadFrequently: true });
 
-        var uiTickCount = 0;
+        var mediaTickCount = 0;
         function tick() {
             if (!videoEl || videoEl.readyState < 2) {
                 videoAnimId = requestAnimationFrame(tick);
@@ -698,10 +622,17 @@
             if (compareOn) Module._app_upload_video_frame(ptr, w, h);
             Module._free(ptr);
 
-            /* Throttle DOM updates to ~10 fps to avoid layout thrashing */
-            if (isVideoMode && ++uiTickCount % 6 === 0) {
-                updateVideoUI();
-                syncPlayIcon();
+            /* Push media state to C (~10 fps to avoid overhead) */
+            if (isVideoMode && Module._app_set_media_state && ++mediaTickCount % 6 === 0) {
+                var dur = videoEl.duration || 0;
+                if (!isFinite(dur)) dur = 0;
+                Module._app_set_media_state(
+                    videoEl.paused ? 0 : 1,
+                    videoEl.currentTime,
+                    dur,
+                    audioAvailable ? 1 : 0,
+                    audioMuted ? 1 : 0
+                );
             }
 
             videoAnimId = requestAnimationFrame(tick);

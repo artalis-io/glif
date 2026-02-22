@@ -23,7 +23,7 @@ canvas { display: block; width: 100%; height: 100%; }
 
 /* Compare split divider + labels */
 #compareDivider {
-  position: absolute; top: 0; bottom: 0; width: 3px;
+  position: absolute; top: 0; width: 3px;
   background: var(--accent); z-index: 5;
   pointer-events: none; display: none;
 }
@@ -48,46 +48,6 @@ canvas { display: block; width: 100%; height: 100%; }
 .drop-overlay .label { font-size: 18px; color: var(--text-dim); font-family: -apple-system, system-ui, sans-serif; }
 .drop-overlay .sublabel { font-size: 13px; color: #444; font-family: -apple-system, system-ui, sans-serif; }
 
-.controls {
-  display: flex; align-items: center; gap: 12px;
-  padding: 10px 16px; background: var(--surface);
-  border-top: 1px solid var(--border); flex-shrink: 0;
-  user-select: none;
-}
-.controls.hidden { display: none; }
-.controls.image-mode [data-video-only] { display: none; }
-
-.btn {
-  background: none; border: none; color: var(--text); cursor: pointer;
-  padding: 6px; border-radius: 6px; display: flex; align-items: center;
-  justify-content: center; transition: background 0.15s;
-}
-.btn:hover { background: rgba(255,255,255,0.08); }
-.btn.active { color: var(--accent); }
-.btn svg { width: 20px; height: 20px; fill: currentColor; }
-
-.progress-wrap {
-  flex: 1; height: 32px; display: flex; align-items: center; cursor: pointer;
-  position: relative;
-}
-.progress-track {
-  width: 100%; height: 4px; background: var(--border); border-radius: 2px;
-  position: relative; transition: height 0.15s;
-}
-.progress-wrap:hover .progress-track { height: 6px; }
-.progress-fill {
-  height: 100%; background: var(--accent); border-radius: 2px;
-  position: absolute; top: 0; left: 0; pointer-events: none;
-}
-
-.time { font-size: 13px; color: var(--text-dim); font-family: -apple-system, system-ui, sans-serif; font-variant-numeric: tabular-nums; white-space: nowrap; min-width: 90px; }
-
-.speed-select, .format-select {
-  background: var(--surface); color: var(--text-dim); border: 1px solid var(--border);
-  border-radius: 4px; padding: 4px 6px; font-size: 12px; cursor: pointer;
-  outline: none; font-family: -apple-system, system-ui, sans-serif;
-}
-.speed-select:hover, .format-select:hover { border-color: #444; color: var(--text); }
 </style>
 </head>
 <body>
@@ -104,54 +64,6 @@ canvas { display: block; width: 100%; height: 100%; }
     <div id="compareLabelR" class="compare-label">ASCII</div>
   </div>
 
-  <div class="controls hidden" id="controls">
-    <button class="btn" id="playPause" data-video-only title="Play/Pause (Space)">
-      <svg id="iconPlay" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
-      <svg id="iconPause" viewBox="0 0 24 24" style="display:none"><path d="M6 4h4v16H6zm8 0h4v16h-4z"/></svg>
-    </button>
-
-    <span class="time" id="timeDisplay" data-video-only>0:00 / 0:00</span>
-
-    <div class="progress-wrap" id="progressWrap" data-video-only>
-      <div class="progress-track">
-        <div class="progress-fill" id="progressFill" style="width:0%"></div>
-      </div>
-    </div>
-
-    <select class="speed-select" id="speed" data-video-only title="Playback speed">
-      <option value="0.25">0.25x</option>
-      <option value="0.5">0.5x</option>
-      <option value="1" selected>1x</option>
-      <option value="2">2x</option>
-      <option value="4">4x</option>
-    </select>
-
-    <button class="btn" id="audioBtn" data-video-only title="Toggle Audio (A)" style="display:none">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19" fill="currentColor"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>
-    </button>
-
-    <button class="btn" id="hdrBtn" title="HDR Enhancement (H)">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
-    </button>
-
-    <button class="btn" id="compareBtn" title="Compare Original (C)">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="12" y1="3" x2="12" y2="21"/></svg>
-    </button>
-
-    <select class="format-select" id="exportFormat" title="Export format">
-      <option value="png" selected>PNG</option>
-      <option value="ppm">PPM</option>
-      <option value="svg">SVG</option>
-    </select>
-
-    <button class="btn" id="exportBtn" title="Export (S)">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-    </button>
-
-    <button class="btn" id="fullscreenBtn" title="Fullscreen (F)">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 00-2 2v3m18 0V5a2 2 0 00-2-2h-3m0 18h3a2 2 0 002-2v-3M3 16v3a2 2 0 002 2h3"/></svg>
-    </button>
-  </div>
 </div>
 <script src="glif.js"></script>
 <script src="glif-app.js"></script>
