@@ -146,7 +146,11 @@ WASM_UI_OUT = web/glif.js
 
 WASM_EXPORTS = '_app_init','_app_resize','_app_set_dpr','_app_frame','_app_mouse','_app_key', \
                '_app_touch','_app_load_font','_app_load_image','_app_video_frame', \
-               '_app_switch_camera','_app_get_camera_count','_malloc','_free'
+               '_app_switch_camera','_app_get_camera_count', \
+               '_app_get_grid_rows','_app_get_grid_cols','_app_get_grid_cell_w','_app_get_grid_cell_h', \
+               '_app_export_grid','_app_get_font_ptr','_app_get_font_len', \
+               '_app_set_compare','_app_upload_video_frame','_app_get_content_rect', \
+               '_malloc','_free'
 
 wasm: $(WASM_UI_SRC)
 	@mkdir -p web

@@ -199,15 +199,47 @@ void glif_grid_compute_colors(GlifGrid *grid, const GlifImage *img) {
     for (int ci = 0; ci < ncells; ci++) {
             GlifGridCell *cell = &grid->cells[ci];
             int64_t rsum = 0, gsum = 0, bsum = 0; int count = 0;
+            int row_end = cell->py + grid->cell_h;
+            int col_end = cell->px + grid->cell_w;
+            if (row_end > img->height) row_end = img->height;
+            if (col_end > img->width) col_end = img->width;
 
-            for (int y = cell->py; y < cell->py + grid->cell_h && y < img->height; y++) {
-                for (int x = cell->px; x < cell->px + grid->cell_w && x < img->width; x++) {
-                    const uint8_t *px = img->pixels + (y * img->width + x) * img->channels;
+            for (int y = cell->py; y < row_end; y++) {
+                const uint8_t *row = img->pixels + (y * img->width + cell->px) * img->channels;
+                int row_pixels = col_end - cell->px;
+#if USE_WASM_SIMD
+                int channels = img->channels;
+                v128_t vr = wasm_i32x4_splat(0);
+                v128_t vg = wasm_i32x4_splat(0);
+                v128_t vb = wasm_i32x4_splat(0);
+                int x = 0, x4 = row_pixels & ~3;
+                for (; x < x4; x += 4) {
+                    const uint8_t *p0 = row + x * channels;
+                    const uint8_t *p1 = p0 + channels;
+                    const uint8_t *p2 = p1 + channels;
+                    const uint8_t *p3 = p2 + channels;
+                    vr = wasm_i32x4_add(vr, wasm_i32x4_make(p0[0], p1[0], p2[0], p3[0]));
+                    vg = wasm_i32x4_add(vg, wasm_i32x4_make(p0[1], p1[1], p2[1], p3[1]));
+                    vb = wasm_i32x4_add(vb, wasm_i32x4_make(p0[2], p1[2], p2[2], p3[2]));
+                }
+                int32_t tmp[4];
+                wasm_v128_store(tmp, vr); rsum += tmp[0] + tmp[1] + tmp[2] + tmp[3];
+                wasm_v128_store(tmp, vg); gsum += tmp[0] + tmp[1] + tmp[2] + tmp[3];
+                wasm_v128_store(tmp, vb); bsum += tmp[0] + tmp[1] + tmp[2] + tmp[3];
+                for (; x < row_pixels; x++) {
+                    const uint8_t *px = row + x * channels;
+                    rsum += px[0]; gsum += px[1]; bsum += px[2];
+                }
+                count += row_pixels;
+#else
+                for (int x = 0; x < row_pixels; x++) {
+                    const uint8_t *px = row + x * img->channels;
                     rsum += px[0];
                     gsum += px[1];
                     bsum += px[2];
-                    count++;
                 }
+                count += row_pixels;
+#endif
             }
             if (count > 0) {
                 cell->r = (uint8_t)(rsum / (int64_t)count);

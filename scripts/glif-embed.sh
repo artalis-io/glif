@@ -19,13 +19,14 @@ WASM_BIN="$WEB_DIR/glif-player-wasm.wasm"
 MAX_GLIF_SIZE=$((50 * 1048576))
 
 usage() {
-    echo "Usage: $0 <input.glif> [-o output.html] [--force]"
+    echo "Usage: $0 <input.glif> [-o output.html] [--video <path>] [--force]"
     echo ""
     echo "Bundles a .glif file into a self-contained HTML video player."
     echo ""
     echo "Options:"
-    echo "  -o <path>   Output HTML file (default: <input>.html)"
-    echo "  --force     Skip size warning for large files"
+    echo "  -o <path>        Output HTML file (default: <input>.html)"
+    echo "  --video <path>   Embed original video for side-by-side comparison"
+    echo "  --force          Skip size warning for large files"
     echo ""
     echo "Requires: make wasm-player (produces web/glif-player-wasm.js + .wasm)"
     exit 1
@@ -34,10 +35,12 @@ usage() {
 # Parse args
 INPUT=""
 OUTPUT=""
+VIDEO=""
 FORCE=0
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -o) OUTPUT="$2"; shift 2 ;;
+        --video) VIDEO="$2"; shift 2 ;;
         --force) FORCE=1; shift ;;
         -h|--help) usage ;;
         *)
@@ -85,6 +88,14 @@ echo "Encoding .glif data..."
 GLIF_B64=$(base64 < "$INPUT" | tr -d '\n')
 echo "Encoding WASM binary..."
 WASM_B64=$(base64 < "$WASM_BIN" | tr -d '\n')
+
+VIDEO_B64=""
+if [[ -n "$VIDEO" ]]; then
+    [[ -f "$VIDEO" ]] || { echo "Error: video file not found: $VIDEO" >&2; exit 1; }
+    VIDEO_SIZE=$(wc -c < "$VIDEO" | tr -d ' ')
+    echo "Encoding original video ($VIDEO_SIZE bytes)..."
+    VIDEO_B64=$(base64 < "$VIDEO" | tr -d '\n')
+fi
 
 echo "Generating HTML → $OUTPUT"
 
@@ -185,6 +196,19 @@ canvas { display: block; max-width: 100%; max-height: 100%; object-fit: contain;
 .info-bar.hidden { display: none; }
 .info-bar a { color: var(--text-dim); text-decoration: none; }
 .info-bar a:hover { color: var(--accent); }
+
+.compare-divider {
+  position: absolute; top: 0; bottom: 0; width: 3px;
+  background: var(--accent); cursor: ew-resize; z-index: 3;
+  pointer-events: auto;
+}
+.compare-label {
+  position: absolute; top: 8px; padding: 2px 8px;
+  background: rgba(0,0,0,0.7); color: var(--text); font-size: 11px;
+  border-radius: 3px; z-index: 4; pointer-events: none;
+}
+.compare-label-left { left: 8px; }
+.compare-label-right { right: 8px; }
 </style>
 </head>
 <body>
@@ -195,6 +219,10 @@ canvas { display: block; max-width: 100%; max-height: 100%; object-fit: contain;
       <div class="label" id="loadingLabel">Loading...</div>
     </div>
     <canvas id="glif-player-canvas" width="1280" height="720"></canvas>
+    <video id="compareVideo" class="compare-video" muted playsinline style="display:none"></video>
+    <div id="compareDivider" class="compare-divider" style="display:none"></div>
+    <div id="compareLabelL" class="compare-label compare-label-left" style="display:none">Original</div>
+    <div id="compareLabelR" class="compare-label compare-label-right" style="display:none">ASCII</div>
   </div>
 
   <div class="controls" id="controlBar">
@@ -225,6 +253,10 @@ canvas { display: block; max-width: 100%; max-height: 100%; object-fit: contain;
 
     <button class="btn" id="hqBtn" title="Original Audio (Q)" style="display:none">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><text x="3" y="17" font-size="14" font-weight="bold" fill="currentColor" stroke="none">HQ</text></svg>
+    </button>
+
+    <button class="btn" id="compareBtn" title="Compare Original (V)" style="display:none">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="12" y1="3" x2="12" y2="21"/><polyline points="8 12 5 9 8 6"/><polyline points="16 12 19 15 16 18"/></svg>
     </button>
 
     <button class="btn" id="hdrBtn" title="HDR Enhancement (H)">
@@ -265,7 +297,15 @@ echo '<script type="application/octet-stream" id="glifData">' >> "$OUTPUT"
 echo "$GLIF_B64" >> "$OUTPUT"
 echo '</script>' >> "$OUTPUT"
 
-echo "<script>var __GLIF_NAME = \"$NAME\";</script>" >> "$OUTPUT"
+# Embed original video if provided
+if [[ -n "$VIDEO_B64" ]]; then
+    echo '<script type="application/octet-stream" id="origVideo">' >> "$OUTPUT"
+    echo "$VIDEO_B64" >> "$OUTPUT"
+    echo '</script>' >> "$OUTPUT"
+fi
+
+echo "<script>var __GLIF_NAME = \"$NAME\";</script>"  >> "$OUTPUT"
+echo "<script>var __HAS_VIDEO = $( [[ -n "$VIDEO_B64" ]] && echo 'true' || echo 'false' );</script>" >> "$OUTPUT"
 
 cat >> "$OUTPUT" << 'EMBED_EOF'
 <script>
@@ -373,6 +413,10 @@ cat >> "$OUTPUT" << 'EMBED_EOF'
             frame = Math.max(0, Math.min(frame, frames - 1));
             currentFrame = frame;
             module._player_decode_frame(frame);
+            if (compareActive && compareVideo.src) {
+                compareVideo.currentTime = frame / fps;
+                renderCompareFrame();
+            }
             module._player_render();
             updateUI(frame);
             if (playing) { stopAudio(); startAudio(); }
@@ -393,6 +437,7 @@ cat >> "$OUTPUT" << 'EMBED_EOF'
             }
             if (advanced) {
                 module._player_decode_frame(currentFrame);
+                renderCompareFrame();
                 module._player_render();
                 playAudioForFrame(currentFrame);
                 updateUI(currentFrame);
@@ -405,12 +450,18 @@ cat >> "$OUTPUT" << 'EMBED_EOF'
                 playing = false;
                 if (rafId !== null) { cancelAnimationFrame(rafId); rafId = null; }
                 stopAudio();
+                if (compareActive && compareVideo.src) compareVideo.pause();
             } else {
                 playing = true;
                 lastTime = performance.now();
                 accumulator = 0;
                 rafId = requestAnimationFrame(tick);
                 startAudio();
+                if (compareActive && compareVideo.src) {
+                    compareVideo.currentTime = currentFrame / fps;
+                    compareVideo.playbackRate = speed;
+                    compareVideo.play();
+                }
             }
             syncPlayIcon();
         }
@@ -582,6 +633,104 @@ cat >> "$OUTPUT" << 'EMBED_EOF'
             }
         }
 
+        // --- Compare overlay (GPU-native) ---
+        var compareBtn = document.getElementById('compareBtn');
+        var compareVideo = document.getElementById('compareVideo');
+        var compareDivider = document.getElementById('compareDivider');
+        var compareLabelL = document.getElementById('compareLabelL');
+        var compareLabelR = document.getElementById('compareLabelR');
+        var compareActive = false;
+        var sliderX = 0.5; // 0..1
+        var compareReady = false;
+        var glCtx = canvas.getContext('webgl');
+
+        if (typeof __HAS_VIDEO !== 'undefined' && __HAS_VIDEO) {
+            var videoB64 = document.getElementById('origVideo').textContent.trim();
+            var videoBytes = Uint8Array.from(atob(videoB64), function(c) { return c.charCodeAt(0); });
+            var videoBlob = new Blob([videoBytes], { type: 'video/mp4' });
+            var videoUrl = URL.createObjectURL(videoBlob);
+            compareVideo.src = videoUrl;
+            compareVideo.addEventListener('loadeddata', function() { compareReady = true; });
+            compareBtn.style.display = '';
+        }
+
+        function renderCompareFrame() {
+            if (!compareActive || !compareReady || !glCtx) return;
+            module._player_bind_video_tex();
+            glCtx.texImage2D(glCtx.TEXTURE_2D, 0, glCtx.RGBA, glCtx.RGBA, glCtx.UNSIGNED_BYTE, compareVideo);
+        }
+
+        function sizeCompare() {
+            if (!compareActive) return;
+            var cRect = canvas.getBoundingClientRect();
+            var aRect = canvasArea.getBoundingClientRect();
+            var divX = cRect.left - aRect.left + cRect.width * sliderX;
+            compareDivider.style.left = divX + 'px';
+            compareDivider.style.top = (cRect.top - aRect.top) + 'px';
+            compareDivider.style.height = cRect.height + 'px';
+            compareLabelL.style.top = (cRect.top - aRect.top + 8) + 'px';
+            compareLabelL.style.left = (cRect.left - aRect.left + 8) + 'px';
+            compareLabelR.style.top = (cRect.top - aRect.top + 8) + 'px';
+            compareLabelR.style.right = (aRect.right - cRect.right + 8) + 'px';
+        }
+
+        function toggleCompare() {
+            if (!compareVideo.src) return;
+            compareActive = !compareActive;
+            compareBtn.classList.toggle('active', compareActive);
+            if (compareActive) {
+                compareDivider.style.display = 'block';
+                compareLabelL.style.display = 'block';
+                compareLabelR.style.display = 'block';
+                compareVideo.currentTime = currentFrame / fps;
+                if (playing) compareVideo.play();
+                compareVideo.playbackRate = speed;
+                module._player_set_compare(1, sliderX);
+                renderCompareFrame();
+                if (!playing) module._player_render();
+                sizeCompare();
+            } else {
+                compareDivider.style.display = 'none';
+                compareLabelL.style.display = 'none';
+                compareLabelR.style.display = 'none';
+                compareVideo.pause();
+                module._player_set_compare(0, 0.5);
+                if (!playing) module._player_render();
+            }
+        }
+
+        // Divider drag
+        (function() {
+            var dragging = false;
+            compareDivider.addEventListener('mousedown', function(e) { dragging = true; e.preventDefault(); });
+            compareDivider.addEventListener('touchstart', function(e) { dragging = true; e.preventDefault(); }, {passive: false});
+            function onMove(clientX) {
+                if (!dragging || !compareActive) return;
+                var cRect = canvas.getBoundingClientRect();
+                sliderX = Math.max(0, Math.min(1, (clientX - cRect.left) / cRect.width));
+                module._player_set_compare(1, sliderX);
+                sizeCompare();
+                if (!playing) {
+                    renderCompareFrame();
+                    module._player_render();
+                }
+            }
+            document.addEventListener('mousemove', function(e) { onMove(e.clientX); });
+            document.addEventListener('touchmove', function(e) { if (dragging) { onMove(e.touches[0].clientX); e.preventDefault(); } }, {passive: false});
+            document.addEventListener('mouseup', function() { dragging = false; });
+            document.addEventListener('touchend', function() { dragging = false; });
+        })();
+
+        // Re-render on seeked when paused (video element fires seeked asynchronously)
+        compareVideo.addEventListener('seeked', function() {
+            if (compareActive && !playing) {
+                renderCompareFrame();
+                module._player_render();
+            }
+        });
+
+        compareBtn.addEventListener('click', toggleCompare);
+
         // Enable HDR by default
         module._player_set_hdr(0.7);
         hdrBtn.classList.add('active');
@@ -615,12 +764,16 @@ cat >> "$OUTPUT" << 'EMBED_EOF'
         speedSel.addEventListener('change', function() {
             speed = parseFloat(speedSel.value);
             if (audioSource) audioSource.playbackRate.value = speed;
+            if (compareActive) compareVideo.playbackRate = speed;
         });
 
         hdrBtn.addEventListener('click', toggleHDR);
         audioBtn.addEventListener('click', toggleAudio);
         fullscreenBtn.addEventListener('click', toggleFullscreen);
-        document.addEventListener('fullscreenchange', function() { sizeCanvas(); });
+        document.addEventListener('fullscreenchange', function() {
+            sizeCanvas();
+            if (compareActive) sizeCompare();
+        });
 
         document.addEventListener('keydown', function(e) {
             if (e.target.tagName === 'SELECT') return;
@@ -641,6 +794,9 @@ cat >> "$OUTPUT" << 'EMBED_EOF'
                 case 'q': case 'Q':
                     toggleHQ();
                     break;
+                case 'v': case 'V':
+                    toggleCompare();
+                    break;
                 case 'ArrowLeft':
                     seek(Math.max(0, currentFrame - Math.round(fps * 5)));
                     break;
@@ -652,17 +808,22 @@ cat >> "$OUTPUT" << 'EMBED_EOF'
                     speed = Math.min(10, speed * 2);
                     speedSel.value = speed;
                     if (audioSource) audioSource.playbackRate.value = speed;
+                    if (compareActive) compareVideo.playbackRate = speed;
                     break;
                 case 'ArrowDown':
                     e.preventDefault();
                     speed = Math.max(0.25, speed / 2);
                     speedSel.value = speed;
                     if (audioSource) audioSource.playbackRate.value = speed;
+                    if (compareActive) compareVideo.playbackRate = speed;
                     break;
             }
         });
 
-        window.addEventListener('resize', function() { sizeCanvas(); });
+        window.addEventListener('resize', function() {
+            sizeCanvas();
+            if (compareActive) sizeCompare();
+        });
 
     } catch (err) {
         loadingLabel.textContent = 'Error: ' + err.message;

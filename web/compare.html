@@ -1,0 +1,588 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Glif Compare</title>
+<style>
+:root {
+  --bg: #0a0a0a;
+  --surface: #141414;
+  --border: #2a2a2a;
+  --text: #e0e0e0;
+  --text-dim: #666;
+  --accent: #4a9eff;
+  --accent-hover: #6ab4ff;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { height: 100%; background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; }
+
+.app {
+  max-width: 1200px; margin: 0 auto; padding: 32px 24px;
+  display: flex; flex-direction: column; gap: 24px; min-height: 100vh;
+}
+
+h1 { font-size: 24px; font-weight: 600; }
+h1 span { color: var(--accent); }
+
+.drop-zone {
+  border: 2px dashed var(--border); border-radius: 12px;
+  padding: 48px 24px; text-align: center; cursor: pointer;
+  transition: border-color 0.2s, background 0.2s;
+}
+.drop-zone:hover, .drop-zone.dragover {
+  border-color: var(--accent); background: rgba(74, 158, 255, 0.05);
+}
+.drop-zone p { color: var(--text-dim); font-size: 15px; margin-top: 8px; }
+.drop-zone .icon { font-size: 36px; color: var(--text-dim); }
+
+.btn {
+  background: none; border: 1px solid var(--border); color: var(--text);
+  cursor: pointer; padding: 8px 16px; border-radius: 6px;
+  font-size: 14px; transition: background 0.15s, border-color 0.15s;
+  display: inline-flex; align-items: center; gap: 6px;
+}
+.btn:hover { background: rgba(255,255,255,0.06); border-color: #444; }
+.btn:disabled { opacity: 0.4; cursor: default; }
+.btn.active { border-color: var(--accent); color: var(--accent); }
+
+.card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 8px; padding: 16px; display: flex; flex-direction: column; gap: 12px;
+}
+.card h3 { font-size: 14px; font-weight: 500; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.5px; }
+
+.canvas-area {
+  position: relative; background: #000; border-radius: 8px; overflow: hidden;
+  display: flex; align-items: center; justify-content: center;
+  min-height: 400px;
+}
+canvas { display: block; max-width: 100%; max-height: 70vh; }
+
+.compare-divider {
+  position: absolute; top: 0; bottom: 0; width: 3px;
+  background: var(--accent); cursor: ew-resize; z-index: 3;
+  pointer-events: none;
+}
+.canvas-area { cursor: default; }
+.canvas-area.compare-active { cursor: ew-resize; }
+.compare-label {
+  position: absolute; top: 8px; padding: 2px 8px;
+  background: rgba(0,0,0,0.7); color: var(--text); font-size: 11px;
+  border-radius: 3px; z-index: 4; pointer-events: none;
+}
+.compare-label-left { left: 8px; }
+.compare-label-right { right: 8px; }
+
+.controls {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+}
+
+.progress-wrap {
+  flex: 1; min-width: 200px; height: 32px; display: flex; align-items: center;
+  cursor: pointer; position: relative;
+}
+.progress-track {
+  width: 100%; height: 4px; background: var(--border); border-radius: 2px;
+  position: relative;
+}
+.progress-wrap:hover .progress-track { height: 6px; }
+.progress-fill {
+  height: 100%; background: var(--accent); border-radius: 2px;
+  position: absolute; top: 0; left: 0; pointer-events: none;
+}
+
+.time { font-size: 13px; color: var(--text-dim); font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+.speed-select {
+  background: var(--surface); color: var(--text-dim); border: 1px solid var(--border);
+  border-radius: 4px; padding: 4px 6px; font-size: 12px; cursor: pointer; outline: none;
+}
+
+.progress-bar { height: 6px; background: var(--border); border-radius: 3px; overflow: hidden; }
+.progress-bar .fill { height: 100%; background: var(--accent); border-radius: 3px; transition: width 0.15s; }
+.status-text { font-size: 13px; color: var(--text-dim); }
+
+.hidden { display: none !important; }
+
+.footer {
+  margin-top: auto; padding-top: 16px; text-align: center;
+  font-size: 12px; color: var(--text-dim);
+}
+.footer a { color: var(--text-dim); text-decoration: none; }
+.footer a:hover { color: var(--accent); }
+</style>
+</head>
+<body>
+<div class="app">
+  <h1>Glif <span>Compare</span></h1>
+
+  <div class="drop-zone" id="dropZone">
+    <div class="icon">&#x1F4C1;</div>
+    <p>Drop a <strong>.glif</strong> file and a <strong>video</strong> file here</p>
+    <p style="font-size:12px; margin-top:4px">or click to select files</p>
+    <input type="file" id="fileInput" multiple accept=".glif,video/*" style="display:none">
+  </div>
+
+  <div class="card hidden" id="statusCard">
+    <h3>Loading</h3>
+    <div class="progress-bar"><div class="fill" id="loadProgress" style="width:0%"></div></div>
+    <div class="status-text" id="statusText">Initializing...</div>
+  </div>
+
+  <div class="card hidden" id="playerCard">
+    <div class="canvas-area compare-active" id="canvasArea">
+      <canvas id="glif-player-canvas" width="1280" height="720"></canvas>
+      <div id="compareDivider" class="compare-divider"></div>
+      <div id="compareLabelL" class="compare-label compare-label-left">Original</div>
+      <div id="compareLabelR" class="compare-label compare-label-right">ASCII</div>
+    </div>
+
+    <div class="controls">
+      <button class="btn" id="playPause" title="Play/Pause (Space)">Play</button>
+      <span class="time" id="timeDisplay">0:00 / 0:00</span>
+      <div class="progress-wrap" id="progressWrap">
+        <div class="progress-track">
+          <div class="progress-fill" id="progressFill" style="width:0%"></div>
+        </div>
+      </div>
+      <select class="speed-select" id="speed">
+        <option value="0.25">0.25x</option>
+        <option value="0.5">0.5x</option>
+        <option value="1" selected>1x</option>
+        <option value="2">2x</option>
+      </select>
+      <button class="btn active" id="hdrBtn" title="HDR (H)">HDR</button>
+      <button class="btn active" id="compareBtn" title="Compare (V)">Compare</button>
+    </div>
+
+    <div class="status-text" id="bufferStatus"></div>
+  </div>
+
+  <div class="footer">
+    <a href="https://github.com/artalis-io/glif" target="_blank">glif</a>
+  </div>
+</div>
+
+<script type="module">
+import { FFmpeg } from '../vendor/ffmpeg/ffmpeg.js';
+
+const dropZone = document.getElementById('dropZone');
+const fileInput = document.getElementById('fileInput');
+const statusCard = document.getElementById('statusCard');
+const statusText = document.getElementById('statusText');
+const loadProgress = document.getElementById('loadProgress');
+const playerCard = document.getElementById('playerCard');
+const canvas = document.getElementById('glif-player-canvas');
+const canvasArea = document.getElementById('canvasArea');
+const playPauseBtn = document.getElementById('playPause');
+const timeDisplay = document.getElementById('timeDisplay');
+const progressWrap = document.getElementById('progressWrap');
+const progressFill = document.getElementById('progressFill');
+const speedSel = document.getElementById('speed');
+const hdrBtn = document.getElementById('hdrBtn');
+const compareBtn = document.getElementById('compareBtn');
+const compareDivider = document.getElementById('compareDivider');
+const compareLabelL = document.getElementById('compareLabelL');
+const compareLabelR = document.getElementById('compareLabelR');
+const bufferStatus = document.getElementById('bufferStatus');
+
+let glifFile = null;
+let videoFile = null;
+
+// --- Drop zone ---
+
+dropZone.addEventListener('click', () => fileInput.click());
+fileInput.addEventListener('change', () => handleFiles(fileInput.files));
+
+dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('dragover'); });
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+dropZone.addEventListener('drop', (e) => {
+    e.preventDefault();
+    dropZone.classList.remove('dragover');
+    handleFiles(e.dataTransfer.files);
+});
+
+function handleFiles(files) {
+    for (const f of files) {
+        if (f.name.endsWith('.glif')) glifFile = f;
+        else if (f.type.startsWith('video/') || /\.(mp4|webm|mkv|mov|avi)$/i.test(f.name)) videoFile = f;
+    }
+    if (glifFile && videoFile) startCompare();
+    else {
+        const missing = [];
+        if (!glifFile) missing.push('.glif');
+        if (!videoFile) missing.push('video');
+        dropZone.querySelector('p').textContent = 'Still need: ' + missing.join(' and ');
+    }
+}
+
+// --- Main compare flow ---
+
+async function startCompare() {
+    dropZone.classList.add('hidden');
+    statusCard.classList.remove('hidden');
+
+    // 1. Load WASM player
+    statusText.textContent = 'Loading WASM player...';
+    loadProgress.style.width = '10%';
+
+    const playerScript = await fetch('glif-player-wasm.js').then(r => r.text());
+    const playerBlob = new Blob([playerScript], { type: 'text/javascript' });
+    const playerUrl = URL.createObjectURL(playerBlob);
+
+    // Dynamic import of createGlifPlayer
+    const scriptEl = document.createElement('script');
+    scriptEl.textContent = playerScript;
+    document.head.appendChild(scriptEl);
+
+    const module = await createGlifPlayer();
+    const dpr = window.devicePixelRatio || 1;
+    module._player_init(dpr, canvas.width, canvas.height);
+
+    // 2. Load .glif
+    statusText.textContent = 'Loading .glif file...';
+    loadProgress.style.width = '30%';
+
+    const glifBuf = new Uint8Array(await glifFile.arrayBuffer());
+    const ptr = module._malloc(glifBuf.length);
+    module.HEAPU8.set(glifBuf, ptr);
+    const loadResult = module._player_load(ptr, glifBuf.length);
+    module._free(ptr);
+
+    if (loadResult !== 0) {
+        statusText.textContent = 'Error: failed to parse .glif';
+        return;
+    }
+
+    const frames = module._player_get_frames();
+    const fps = module._player_get_fps();
+    const cols = module._player_get_cols();
+    const rows = module._player_get_rows();
+    const cellW = module._player_get_cell_w();
+    const cellH = module._player_get_cell_h();
+
+    // Video dimensions matching the grid aspect
+    const videoW = cols * cellW;
+    const videoH = rows * cellH;
+
+    // 3. Init ffmpeg-wasm
+    statusText.textContent = 'Initializing ffmpeg-wasm...';
+    loadProgress.style.width = '50%';
+
+    const ffmpeg = new FFmpeg();
+    await ffmpeg.load({
+        coreURL: 'vendor/ffmpeg/ffmpeg-core.js',
+        wasmURL: 'vendor/ffmpeg/ffmpeg-core.wasm',
+    });
+
+    // 4. Write video to ffmpeg FS
+    statusText.textContent = 'Loading video into decoder...';
+    loadProgress.style.width = '60%';
+
+    const videoBuf = new Uint8Array(await videoFile.arrayBuffer());
+    await ffmpeg.writeFile('input.mp4', videoBuf);
+
+    // 5. Decode initial chunk
+    statusText.textContent = 'Decoding initial frames...';
+    loadProgress.style.width = '75%';
+
+    const CHUNK_SECONDS = 3;
+    const chunkFrames = Math.ceil(fps * CHUNK_SECONDS);
+
+    // Ring buffer of decoded RGBA frames
+    let frameBuffer = [];
+    let bufferStartFrame = 0;
+    let decoding = false;
+
+    async function decodeChunk(startTime, numFrames) {
+        decoding = true;
+        const outFile = 'chunk.raw';
+        await ffmpeg.exec([
+            '-ss', String(startTime),
+            '-i', 'input.mp4',
+            '-frames:v', String(numFrames),
+            '-f', 'rawvideo',
+            '-pix_fmt', 'rgba',
+            '-s', videoW + 'x' + videoH,
+            outFile
+        ]);
+
+        let rawData;
+        try {
+            rawData = await ffmpeg.readFile(outFile);
+            await ffmpeg.deleteFile(outFile);
+        } catch (err) {
+            decoding = false;
+            return [];
+        }
+
+        const frameSize = videoW * videoH * 4;
+        const count = Math.floor(rawData.length / frameSize);
+        const result = [];
+        for (let i = 0; i < count; i++) {
+            result.push(new Uint8Array(rawData.buffer, rawData.byteOffset + i * frameSize, frameSize));
+        }
+        decoding = false;
+        return result;
+    }
+
+    // Decode first chunk
+    const initialFrames = await decodeChunk(0, chunkFrames);
+    frameBuffer = initialFrames;
+    bufferStartFrame = 0;
+
+    loadProgress.style.width = '100%';
+    statusText.textContent = 'Ready!';
+
+    // 6. Show player
+    statusCard.classList.add('hidden');
+    playerCard.classList.remove('hidden');
+
+    // --- Player state ---
+    let playing = false;
+    let currentFrame = 0;
+    let speed = 1.0;
+    let lastTime = 0;
+    let accumulator = 0;
+    let rafId = null;
+    let hdrOn = true;
+    let compareOn = true;
+    let sliderX = 0.5;
+
+    module._player_set_hdr(0.7);
+    module._player_set_compare(1, sliderX);
+
+    function formatTime(s) {
+        const m = Math.floor(s / 60);
+        return m + ':' + String(Math.floor(s % 60)).padStart(2, '0');
+    }
+
+    function updateUI() {
+        const cur = currentFrame / fps;
+        const total = frames / fps;
+        timeDisplay.textContent = formatTime(cur) + ' / ' + formatTime(total);
+        progressFill.style.width = ((currentFrame / Math.max(1, frames - 1)) * 100) + '%';
+
+        // Buffer status
+        const bufEnd = bufferStartFrame + frameBuffer.length;
+        const ahead = bufEnd - currentFrame;
+        bufferStatus.textContent = 'Buffer: ' + ahead + ' frames ahead (' +
+            (ahead / fps).toFixed(1) + 's)';
+    }
+
+    function sizeCanvas() {
+        const aspect = cols * cellW / (rows * cellH);
+        const rect = canvasArea.getBoundingClientRect();
+        let w = rect.width, h = rect.height;
+        if (w / h > aspect) w = h * aspect; else h = w / aspect;
+        const d = window.devicePixelRatio || 1;
+        canvas.width = Math.round(w * d);
+        canvas.height = Math.round(h * d);
+        canvas.style.width = Math.round(w) + 'px';
+        canvas.style.height = Math.round(h) + 'px';
+        module._player_resize(canvas.width, canvas.height);
+    }
+
+    function sizeCompare() {
+        const cRect = canvas.getBoundingClientRect();
+        const aRect = canvasArea.getBoundingClientRect();
+        const divX = cRect.left - aRect.left + cRect.width * sliderX;
+        compareDivider.style.left = divX + 'px';
+        compareDivider.style.top = (cRect.top - aRect.top) + 'px';
+        compareDivider.style.height = cRect.height + 'px';
+        compareLabelL.style.top = (cRect.top - aRect.top + 8) + 'px';
+        compareLabelL.style.left = (cRect.left - aRect.left + 8) + 'px';
+        compareLabelR.style.top = (cRect.top - aRect.top + 8) + 'px';
+        compareLabelR.style.right = (aRect.right - cRect.right + 8) + 'px';
+    }
+
+    function uploadVideoFrame(frameIdx) {
+        if (!compareOn) return;
+        const localIdx = frameIdx - bufferStartFrame;
+        if (localIdx < 0 || localIdx >= frameBuffer.length) return;
+        const rgba = frameBuffer[localIdx];
+        const fptr = module._malloc(rgba.length);
+        module.HEAPU8.set(rgba, fptr);
+        module._player_upload_video_frame(fptr, videoW, videoH);
+        module._free(fptr);
+    }
+
+    // Pre-fetch next chunk when buffer is running low
+    async function maybePreFetch() {
+        if (decoding) return;
+        const bufEnd = bufferStartFrame + frameBuffer.length;
+        const ahead = bufEnd - currentFrame;
+        if (ahead < chunkFrames / 2 && bufEnd < frames) {
+            const startTime = bufEnd / fps;
+            const remaining = frames - bufEnd;
+            const count = Math.min(chunkFrames, remaining);
+            const newFrames = await decodeChunk(startTime, count);
+            // Append and trim old frames
+            frameBuffer = frameBuffer.concat(newFrames);
+            // Keep at most 2 chunks
+            const maxBuf = chunkFrames * 2;
+            if (frameBuffer.length > maxBuf) {
+                const trim = frameBuffer.length - maxBuf;
+                frameBuffer = frameBuffer.slice(trim);
+                bufferStartFrame += trim;
+            }
+        }
+    }
+
+    function seek(frame) {
+        frame = Math.max(0, Math.min(frame, frames - 1));
+        currentFrame = frame;
+        module._player_decode_frame(frame);
+        uploadVideoFrame(frame);
+        module._player_render();
+        updateUI();
+
+        // If seeking outside buffer, re-decode
+        const localIdx = frame - bufferStartFrame;
+        if (localIdx < 0 || localIdx >= frameBuffer.length) {
+            bufferStartFrame = frame;
+            frameBuffer = [];
+            decodeChunk(frame / fps, chunkFrames).then(f => {
+                frameBuffer = f;
+                bufferStartFrame = frame;
+                // Re-upload since buffer may have been empty
+                uploadVideoFrame(currentFrame);
+                if (!playing) module._player_render();
+            });
+        }
+    }
+
+    function tick(now) {
+        if (!playing) return;
+        const dt = (now - lastTime) / 1000;
+        lastTime = now;
+        accumulator += dt * speed;
+        const frameDur = 1 / fps;
+        let advanced = false;
+        while (accumulator >= frameDur) {
+            accumulator -= frameDur;
+            currentFrame++;
+            if (currentFrame >= frames) currentFrame = 0;
+            advanced = true;
+        }
+        if (advanced) {
+            module._player_decode_frame(currentFrame);
+            uploadVideoFrame(currentFrame);
+            module._player_render();
+            updateUI();
+            maybePreFetch();
+        }
+        rafId = requestAnimationFrame(tick);
+    }
+
+    function togglePlay() {
+        if (playing) {
+            playing = false;
+            if (rafId !== null) { cancelAnimationFrame(rafId); rafId = null; }
+        } else {
+            playing = true;
+            lastTime = performance.now();
+            accumulator = 0;
+            rafId = requestAnimationFrame(tick);
+        }
+        playPauseBtn.textContent = playing ? 'Pause' : 'Play';
+    }
+
+    function toggleHDR() {
+        hdrOn = !hdrOn;
+        module._player_set_hdr(hdrOn ? 0.7 : 0.0);
+        hdrBtn.classList.toggle('active', hdrOn);
+        if (!playing) module._player_render();
+    }
+
+    function toggleCompare() {
+        compareOn = !compareOn;
+        compareBtn.classList.toggle('active', compareOn);
+        canvasArea.classList.toggle('compare-active', compareOn);
+        compareDivider.style.display = compareOn ? 'block' : 'none';
+        compareLabelL.style.display = compareOn ? 'block' : 'none';
+        compareLabelR.style.display = compareOn ? 'block' : 'none';
+        module._player_set_compare(compareOn ? 1 : 0, sliderX);
+        if (compareOn) uploadVideoFrame(currentFrame);
+        if (!playing) module._player_render();
+    }
+
+    // Compare slider: click or drag anywhere on the canvas area
+    (function() {
+        let dragging = false;
+        function updateSplit(clientX) {
+            if (!compareOn) return;
+            const cRect = canvas.getBoundingClientRect();
+            sliderX = Math.max(0, Math.min(1, (clientX - cRect.left) / cRect.width));
+            module._player_set_compare(1, sliderX);
+            sizeCompare();
+            if (!playing) module._player_render();
+        }
+        canvasArea.addEventListener('mousedown', (e) => {
+            if (!compareOn) return;
+            dragging = true;
+            updateSplit(e.clientX);
+            e.preventDefault();
+        });
+        canvasArea.addEventListener('touchstart', (e) => {
+            if (!compareOn) return;
+            dragging = true;
+            updateSplit(e.touches[0].clientX);
+            e.preventDefault();
+        }, {passive: false});
+        document.addEventListener('mousemove', (e) => { if (dragging) updateSplit(e.clientX); });
+        document.addEventListener('touchmove', (e) => { if (dragging) { updateSplit(e.touches[0].clientX); e.preventDefault(); } }, {passive: false});
+        document.addEventListener('mouseup', () => { dragging = false; });
+        document.addEventListener('touchend', () => { dragging = false; });
+    })();
+
+    // --- Events ---
+
+    sizeCanvas();
+    sizeCompare();
+    seek(0);
+
+    playPauseBtn.addEventListener('click', togglePlay);
+    hdrBtn.addEventListener('click', toggleHDR);
+    compareBtn.addEventListener('click', toggleCompare);
+
+    progressWrap.addEventListener('click', (e) => {
+        const rect = progressWrap.getBoundingClientRect();
+        const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+        seek(Math.round(pct * (frames - 1)));
+    });
+
+    speedSel.addEventListener('change', () => {
+        speed = parseFloat(speedSel.value);
+    });
+
+    document.addEventListener('keydown', (e) => {
+        if (e.target.tagName === 'SELECT') return;
+        switch (e.key) {
+            case ' ': e.preventDefault(); togglePlay(); break;
+            case 'h': case 'H': toggleHDR(); break;
+            case 'v': case 'V': toggleCompare(); break;
+            case 'ArrowLeft': seek(Math.max(0, currentFrame - Math.round(fps * 5))); break;
+            case 'ArrowRight': seek(Math.min(frames - 1, currentFrame + Math.round(fps * 5))); break;
+            case 'ArrowUp':
+                e.preventDefault();
+                speed = Math.min(4, speed * 2);
+                speedSel.value = speed;
+                break;
+            case 'ArrowDown':
+                e.preventDefault();
+                speed = Math.max(0.25, speed / 2);
+                speedSel.value = speed;
+                break;
+        }
+    });
+
+    window.addEventListener('resize', () => {
+        sizeCanvas();
+        if (compareOn) sizeCompare();
+    });
+}
+</script>
+</body>
+</html>

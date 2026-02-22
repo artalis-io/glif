@@ -3,6 +3,11 @@
 #include <stdint.h>
 #include <string.h>
 
+#if defined(__EMSCRIPTEN__) && defined(__wasm_simd128__)
+#include <wasm_simd128.h>
+#define USE_WASM_SIMD 1
+#endif
+
 /* ── Quickselect (copied from contrast.c — static there) ── */
 
 /* NaN values are moved to the end to prevent infinite loops. */
@@ -77,12 +82,35 @@ void glif_norm_smoother_apply(GlifNormSmoother *ns, GlifLightnessMap *lm, float 
     if (range < 1e-4f) return;
 
     float inv_range = 1.0f / range;
+#if USE_WASM_SIMD
+    {
+        v128_t vp5 = wasm_f32x4_splat(ns->smooth_p5);
+        v128_t vinv = wasm_f32x4_splat(inv_range);
+        v128_t vzero = wasm_f32x4_splat(0.0f);
+        v128_t vone = wasm_f32x4_splat(1.0f);
+        size_t i = 0, n4 = n & ~(size_t)3;
+        for (; i < n4; i += 4) {
+            v128_t v = wasm_v128_load(lm->data + i);
+            v = wasm_f32x4_mul(wasm_f32x4_sub(v, vp5), vinv);
+            v = wasm_f32x4_max(v, vzero);
+            v = wasm_f32x4_min(v, vone);
+            wasm_v128_store(lm->data + i, v);
+        }
+        for (; i < n; i++) {
+            float v = (lm->data[i] - ns->smooth_p5) * inv_range;
+            if (v < 0.0f) v = 0.0f;
+            if (v > 1.0f) v = 1.0f;
+            lm->data[i] = v;
+        }
+    }
+#else
     for (size_t i = 0; i < n; i++) {
         float v = (lm->data[i] - ns->smooth_p5) * inv_range;
         if (v < 0.0f) v = 0.0f;
         if (v > 1.0f) v = 1.0f;
         lm->data[i] = v;
     }
+#endif
 }
 
 /* ── B. GlifShapeSmoother ── */
@@ -134,12 +162,42 @@ void glif_shape_smoother_apply(GlifShapeSmoother *ss, GlifGrid *grid, float alph
         grid->cells[i].shape = blended;
         ss->prev_shapes[i] = blended;
 
+#if USE_WASM_SIMD
+        {
+            v128_t va = wasm_f32x4_splat(alpha);
+            v128_t vb = wasm_f32x4_splat(beta);
+            /* First 4 floats */
+            v128_t cur0 = wasm_v128_load(grid->cells[i].external.v);
+            v128_t prev0 = wasm_v128_load(ss->prev_externals[i].v);
+            v128_t blend0 = wasm_f32x4_add(wasm_f32x4_mul(cur0, va),
+                                            wasm_f32x4_mul(prev0, vb));
+            wasm_v128_store(grid->cells[i].external.v, blend0);
+            wasm_v128_store(ss->prev_externals[i].v, blend0);
+            /* Next 4 floats */
+            v128_t cur1 = wasm_v128_load(grid->cells[i].external.v + 4);
+            v128_t prev1 = wasm_v128_load(ss->prev_externals[i].v + 4);
+            v128_t blend1 = wasm_f32x4_add(wasm_f32x4_mul(cur1, va),
+                                            wasm_f32x4_mul(prev1, vb));
+            wasm_v128_store(grid->cells[i].external.v + 4, blend1);
+            wasm_v128_store(ss->prev_externals[i].v + 4, blend1);
+            /* Tail: 2 scalar floats */
+            float bv8 = alpha * grid->cells[i].external.v[8]
+                      + beta * ss->prev_externals[i].v[8];
+            grid->cells[i].external.v[8] = bv8;
+            ss->prev_externals[i].v[8] = bv8;
+            float bv9 = alpha * grid->cells[i].external.v[9]
+                      + beta * ss->prev_externals[i].v[9];
+            grid->cells[i].external.v[9] = bv9;
+            ss->prev_externals[i].v[9] = bv9;
+        }
+#else
         for (int j = 0; j < 10; j++) {
             float bv = alpha * grid->cells[i].external.v[j]
                      + beta * ss->prev_externals[i].v[j];
             grid->cells[i].external.v[j] = bv;
             ss->prev_externals[i].v[j] = bv;
         }
+#endif
     }
 }
 

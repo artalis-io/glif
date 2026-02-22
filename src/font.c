@@ -169,11 +169,13 @@ int glif_char_db_create(GlifCharDatabase *db, const char *font_path,
     db->cell_w = cell_w;
     db->cell_h = cell_h;
 
-    db->font_data = read_file(font_path, NULL);
+    size_t file_size = 0;
+    db->font_data = read_file(font_path, &file_size);
     if (!db->font_data) {
         fprintf(stderr, "error: failed to read font file '%s'\n", font_path);
         return -1;
     }
+    db->font_data_len = file_size;
     db->owns_font_data = 1;
 
     if (char_db_init_from_font(db, sc) != 0) {
@@ -186,11 +188,11 @@ int glif_char_db_create(GlifCharDatabase *db, const char *font_path,
 int glif_char_db_create_from_memory(GlifCharDatabase *db, const unsigned char *font_data,
                                size_t font_len, int cell_w, int cell_h,
                                const GlifSamplingConfig *sc) {
-    (void)font_len;
     memset(db, 0, sizeof(*db));
     db->cell_w = cell_w;
     db->cell_h = cell_h;
     db->font_data = (unsigned char *)font_data;
+    db->font_data_len = font_len;
     db->owns_font_data = 0;
 
     if (char_db_init_from_font(db, sc) != 0)

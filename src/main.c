@@ -61,7 +61,7 @@ static void usage(const char *prog) {
         "  -d, --dir-crunch <f>     Directional contrast crunch (default: 1.25)\n"
         "  -g, --global-crunch <f>  Global contrast crunch (default: 1.5)\n"
         "  -c, --color              ANSI truecolor terminal output\n"
-        "  -o, --output <file.ppm>  Write PPM image file\n"
+        "  -o, --output <file>      Write PPM (.ppm) or SVG (.svg) image file\n"
         "  -a, --auto-fit           Fit output to terminal size\n"
         "  -s, --scale <n>          PPM render scale (default: 4)\n"
         "  --dark                   PPM: black bg + colored glyphs\n"
@@ -421,7 +421,19 @@ static int run_image(Config *cfg) {
 
     /* 11. Output */
     if (cfg->output_path) {
-        if (glif_output_ppm(&grid, &db, cfg->output_path, cfg->scale, cfg->dark_mode) != 0) {
+        /* Detect SVG by extension */
+        size_t path_len = strlen(cfg->output_path);
+        int is_svg = (path_len >= 4 &&
+                      strcmp(cfg->output_path + path_len - 4, ".svg") == 0);
+        if (is_svg) {
+            if (glif_output_svg(&grid, &db, cfg->output_path, cfg->dark_mode) != 0) {
+                fprintf(stderr, "error: failed to write SVG file\n");
+            } else {
+                fprintf(stderr, "Wrote %s (%dx%d grid, %dx%d cells)\n",
+                        cfg->output_path, grid.cols, grid.rows,
+                        grid.cell_w, grid.cell_h);
+            }
+        } else if (glif_output_ppm(&grid, &db, cfg->output_path, cfg->scale, cfg->dark_mode) != 0) {
             fprintf(stderr, "error: failed to write PPM file\n");
         } else {
             fprintf(stderr, "Wrote %s (%zux%zu)\n", cfg->output_path,

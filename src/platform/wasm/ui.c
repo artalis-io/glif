@@ -75,6 +75,9 @@ static struct {
     float dpr;
     int canvas_w, canvas_h; /* physical pixels */
 
+    /* Last rendered content rect (CSS logical pixels, relative to canvas) */
+    float content_x, content_y, content_w, content_h;
+
     /* Input state */
     int mouse_x, mouse_y, mouse_buttons;
     int initialized;
@@ -152,6 +155,19 @@ static void vp_render(const GlifGrid *grid, Clay_BoundingBox bounds) {
     glViewport(vp_x, vp_y, vp_w, vp_h);
 
     vp_draw(&app.vp, cols, rows, vp_w, vp_h, 0.0f);
+
+    /* Store content rect in CSS logical pixels for JS overlay positioning */
+    float grid_px_w = (float)cols * (float)app.vp.atlas_cell_w;
+    float grid_px_h = (float)rows * (float)app.vp.atlas_cell_h;
+    float sx = (float)vp_w / grid_px_w;
+    float sy = (float)vp_h / grid_px_h;
+    float s = (sx < sy) ? sx : sy;
+    float rw = grid_px_w * s;
+    float rh = grid_px_h * s;
+    app.content_x = bounds.x + ((float)vp_w - rw) * 0.5f / app.dpr;
+    app.content_y = bounds.y + ((float)vp_h - rh) * 0.5f / app.dpr;
+    app.content_w = rw / app.dpr;
+    app.content_h = rh / app.dpr;
 
     glDisable(GL_SCISSOR_TEST);
 }
@@ -611,4 +627,66 @@ void app_switch_camera(int index) {
 #else
     (void)index;
 #endif
+}
+
+/* ── Grid data export for JS-side SVG/PPM generation ── */
+
+EMSCRIPTEN_KEEPALIVE
+int app_get_grid_rows(void) { return app.has_result ? app.grid.rows : 0; }
+
+EMSCRIPTEN_KEEPALIVE
+int app_get_grid_cols(void) { return app.has_result ? app.grid.cols : 0; }
+
+EMSCRIPTEN_KEEPALIVE
+int app_get_grid_cell_w(void) { return app.cell_w; }
+
+EMSCRIPTEN_KEEPALIVE
+int app_get_grid_cell_h(void) { return app.cell_h; }
+
+EMSCRIPTEN_KEEPALIVE
+void app_export_grid(uint8_t *out) {
+    if (!app.has_result) return;
+    int n = app.grid.rows * app.grid.cols;
+    for (int i = 0; i < n; i++) {
+        out[i * 4 + 0] = (uint8_t)app.grid.cells[i].ch;
+        out[i * 4 + 1] = app.grid.cells[i].r;
+        out[i * 4 + 2] = app.grid.cells[i].g;
+        out[i * 4 + 3] = app.grid.cells[i].b;
+    }
+}
+
+EMSCRIPTEN_KEEPALIVE
+const uint8_t *app_get_font_ptr(void) { return app.font_data; }
+
+EMSCRIPTEN_KEEPALIVE
+int app_get_font_len(void) { return app.font_len; }
+
+/* ── Content rect for JS overlay positioning ── */
+
+EMSCRIPTEN_KEEPALIVE
+void app_get_content_rect(float *out) {
+    out[0] = app.content_x;
+    out[1] = app.content_y;
+    out[2] = app.content_w;
+    out[3] = app.content_h;
+}
+
+/* ── Compare overlay API ── */
+
+EMSCRIPTEN_KEEPALIVE
+void app_set_compare(int mode, float split_pos) {
+    if (!app.initialized) return;
+    app.vp.compare_mode = mode;
+    if (split_pos < 0.0f) split_pos = 0.0f;
+    if (split_pos > 1.0f) split_pos = 1.0f;
+    app.vp.split_pos = split_pos;
+}
+
+EMSCRIPTEN_KEEPALIVE
+void app_upload_video_frame(const uint8_t *rgba, int w, int h) {
+    if (!app.initialized || !rgba || w <= 0 || h <= 0) return;
+    glActiveTexture(GL_TEXTURE3);
+    glBindTexture(GL_TEXTURE_2D, app.vp.video_tex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0,
+                 GL_RGBA, GL_UNSIGNED_BYTE, rgba);
 }

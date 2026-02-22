@@ -2,12 +2,33 @@
  * Glif App — Minimal JS bridge for browser APIs.
  *
  * Forwards mouse/touch/keyboard events to the C UI module,
- * handles file picking, webcam, and DPR-aware canvas sizing.
+ * handles file picking, webcam, video playback controls,
+ * export (PNG/PPM/SVG), HDR, comparison, and DPR-aware canvas sizing.
  */
 (function () {
     'use strict';
 
     const canvas = document.getElementById('canvas');
+    const appWrap = document.getElementById('appWrap');
+    const canvasArea = document.getElementById('canvasArea');
+    const dropOverlay = document.getElementById('dropOverlay');
+    const compareDivider = document.getElementById('compareDivider');
+    const compareLabelL = document.getElementById('compareLabelL');
+    const compareLabelR = document.getElementById('compareLabelR');
+    const controls = document.getElementById('controls');
+    const playPauseBtn = document.getElementById('playPause');
+    const iconPlay = document.getElementById('iconPlay');
+    const iconPause = document.getElementById('iconPause');
+    const timeDisplay = document.getElementById('timeDisplay');
+    const progressWrap = document.getElementById('progressWrap');
+    const progressFill = document.getElementById('progressFill');
+    const speedSel = document.getElementById('speed');
+    const audioBtn = document.getElementById('audioBtn');
+    const hdrBtn = document.getElementById('hdrBtn');
+    const compareBtn = document.getElementById('compareBtn');
+    const exportFormat = document.getElementById('exportFormat');
+    const exportBtn = document.getElementById('exportBtn');
+    const fullscreenBtn = document.getElementById('fullscreenBtn');
 
     let Module = null;
     let cameras = [];
@@ -16,6 +37,13 @@
     let videoStream = null;
     let videoAnimId = null;
     let lastDpr = 0;
+    let isVideoMode = false;
+    let hasContent = false;
+    let hdrOn = false;
+    let compareOn = false;
+    let sliderX = 0.5;
+    let audioMuted = true;
+    let originalImgSrc = null; /* URL for comparison of dropped images */
 
     /* ── DPR + resize ── */
 
@@ -34,11 +62,11 @@
                 Module._app_resize(canvas.width, canvas.height);
             }
         }
+        if (compareOn) sizeCompare();
     }
 
     window.addEventListener('resize', resize);
 
-    /* Re-register on each DPR change (monitor switch, browser zoom) */
     function watchDpr() {
         var mq = window.matchMedia('(resolution: ' + window.devicePixelRatio + 'dppx)');
         mq.addEventListener('change', function () {
@@ -47,6 +75,48 @@
         }, { once: true });
     }
     watchDpr();
+
+    /* ── Control bar show/hide ── */
+
+    function showControls(videoMode) {
+        isVideoMode = videoMode;
+        hasContent = true;
+        controls.classList.remove('hidden');
+        dropOverlay.classList.add('hidden');
+        if (videoMode) {
+            controls.classList.remove('image-mode');
+        } else {
+            controls.classList.add('image-mode');
+        }
+        requestAnimationFrame(function () { resize(); });
+    }
+
+    /* ── Video playback UI helpers ── */
+
+    function formatTime(seconds) {
+        var m = Math.floor(seconds / 60);
+        var s = Math.floor(seconds % 60);
+        return m + ':' + (s < 10 ? '0' : '') + s;
+    }
+
+    function syncPlayIcon() {
+        if (videoEl && !videoEl.paused) {
+            iconPlay.style.display = 'none';
+            iconPause.style.display = '';
+        } else {
+            iconPlay.style.display = '';
+            iconPause.style.display = 'none';
+        }
+    }
+
+    function updateVideoUI() {
+        if (!videoEl || !isVideoMode) return;
+        var cur = videoEl.currentTime;
+        var dur = videoEl.duration || 0;
+        if (!isFinite(dur)) dur = 0;
+        timeDisplay.textContent = formatTime(cur) + ' / ' + formatTime(dur);
+        progressFill.style.width = dur > 0 ? ((cur / dur) * 100) + '%' : '0%';
+    }
 
     /* ── Mouse events ── */
 
@@ -75,7 +145,7 @@
             const t = e.changedTouches[i];
             const x = Math.round((t.clientX - rect.left));
             const y = Math.round((t.clientY - rect.top));
-            let phase = 1; // move
+            let phase = 1;
             if (e.type === 'touchstart') phase = 0;
             else if (e.type === 'touchend' || e.type === 'touchcancel') phase = 2;
             Module._app_touch(t.identifier, x, y, phase);
@@ -90,11 +160,382 @@
     /* ── Keyboard ── */
 
     document.addEventListener('keydown', function (e) {
+        if (e.target.tagName === 'SELECT') return;
         if (Module) Module._app_key(e.keyCode, 1);
+
+        switch (e.key) {
+            case 's': case 'S':
+                doExport();
+                break;
+            case 'f': case 'F':
+                toggleFullscreen();
+                break;
+            case 'h': case 'H':
+                toggleHDR();
+                break;
+            case 'c': case 'C':
+                toggleCompare();
+                break;
+            case 'a': case 'A':
+                if (isVideoMode) toggleAudio();
+                break;
+            case ' ':
+                if (isVideoMode) {
+                    e.preventDefault();
+                    togglePlayPause();
+                }
+                break;
+            case 'ArrowLeft':
+                if (isVideoMode && videoEl) {
+                    videoEl.currentTime = Math.max(0, videoEl.currentTime - 5);
+                    updateVideoUI();
+                }
+                break;
+            case 'ArrowRight':
+                if (isVideoMode && videoEl) {
+                    videoEl.currentTime = Math.min(videoEl.duration || 0, videoEl.currentTime + 5);
+                    updateVideoUI();
+                }
+                break;
+            case 'ArrowUp':
+                if (isVideoMode) {
+                    e.preventDefault();
+                    cycleSpeed(1);
+                }
+                break;
+            case 'ArrowDown':
+                if (isVideoMode) {
+                    e.preventDefault();
+                    cycleSpeed(-1);
+                }
+                break;
+        }
     });
     document.addEventListener('keyup', function (e) {
         if (Module) Module._app_key(e.keyCode, 0);
     });
+
+    /* ── HDR (CSS filter) ── */
+
+    function toggleHDR() {
+        if (!hasContent) return;
+        hdrOn = !hdrOn;
+        canvas.style.filter = hdrOn ? 'contrast(1.2) saturate(1.3)' : '';
+        hdrBtn.classList.toggle('active', hdrOn);
+    }
+
+    hdrBtn.addEventListener('click', toggleHDR);
+
+    /* ── Comparison (WebGL split) ── */
+
+    var contentRectPtr = 0;
+    function getContentRect() {
+        if (!Module) return null;
+        if (!contentRectPtr) contentRectPtr = Module._malloc(16);
+        Module._app_get_content_rect(contentRectPtr);
+        var view = new Float32Array(Module.HEAPU8.buffer, contentRectPtr, 4);
+        return { x: view[0], y: view[1], w: view[2], h: view[3] };
+    }
+
+    function sizeCompare() {
+        var cr = getContentRect();
+        if (!cr || cr.w <= 0) return;
+        var cRect = canvas.getBoundingClientRect();
+        var aRect = canvasArea.getBoundingClientRect();
+        var ox = cRect.left - aRect.left;
+        var oy = cRect.top - aRect.top;
+        var contentLeft = ox + cr.x;
+        var contentTop = oy + cr.y;
+        compareDivider.style.left = (contentLeft + cr.w * sliderX) + 'px';
+        compareDivider.style.top = contentTop + 'px';
+        compareDivider.style.height = cr.h + 'px';
+        compareLabelL.style.top = (contentTop + 8) + 'px';
+        compareLabelL.style.left = (contentLeft + 8) + 'px';
+        compareLabelR.style.top = (contentTop + 8) + 'px';
+        compareLabelR.style.right = (aRect.width - contentLeft - cr.w + 8) + 'px';
+    }
+
+    function uploadImageForCompare() {
+        if (!originalImgSrc || !Module) return;
+        var img = new Image();
+        img.onload = function () {
+            var c = document.createElement('canvas');
+            c.width = img.naturalWidth || img.width;
+            c.height = img.naturalHeight || img.height;
+            var ctx = c.getContext('2d');
+            ctx.drawImage(img, 0, 0);
+            var data = ctx.getImageData(0, 0, c.width, c.height);
+            var ptr = Module._malloc(data.data.length);
+            Module.HEAPU8.set(data.data, ptr);
+            Module._app_upload_video_frame(ptr, c.width, c.height);
+            Module._free(ptr);
+        };
+        img.src = originalImgSrc;
+    }
+
+    function toggleCompare() {
+        if (!hasContent || !Module) return;
+        compareOn = !compareOn;
+        compareBtn.classList.toggle('active', compareOn);
+        canvasArea.classList.toggle('compare-active', compareOn);
+        compareDivider.style.display = compareOn ? 'block' : 'none';
+        compareLabelL.style.display = compareOn ? 'block' : 'none';
+        compareLabelR.style.display = compareOn ? 'block' : 'none';
+        Module._app_set_compare(compareOn ? 1 : 0, sliderX);
+        if (compareOn) {
+            if (!isVideoMode) uploadImageForCompare();
+            sizeCompare();
+        }
+    }
+
+    compareBtn.addEventListener('click', toggleCompare);
+
+    /* Draggable split: click/drag on canvasArea moves split position */
+    (function () {
+        var dragging = false;
+        function updateSplit(clientX) {
+            if (!compareOn || !Module) return;
+            var cr = getContentRect();
+            if (!cr || cr.w <= 0) return;
+            var cRect = canvas.getBoundingClientRect();
+            var contentLeft = cRect.left + cr.x;
+            sliderX = Math.max(0, Math.min(1, (clientX - contentLeft) / cr.w));
+            Module._app_set_compare(1, sliderX);
+            sizeCompare();
+        }
+        canvasArea.addEventListener('mousedown', function (e) {
+            if (!compareOn) return;
+            dragging = true;
+            updateSplit(e.clientX);
+            e.preventDefault();
+        });
+        canvasArea.addEventListener('touchstart', function (e) {
+            if (!compareOn) return;
+            dragging = true;
+            updateSplit(e.touches[0].clientX);
+            e.preventDefault();
+        }, { passive: false });
+        document.addEventListener('mousemove', function (e) { if (dragging) updateSplit(e.clientX); });
+        document.addEventListener('touchmove', function (e) {
+            if (dragging) { updateSplit(e.touches[0].clientX); e.preventDefault(); }
+        }, { passive: false });
+        document.addEventListener('mouseup', function () { dragging = false; });
+        document.addEventListener('touchend', function () { dragging = false; });
+    })();
+
+    /* ── Audio ── */
+
+    function toggleAudio() {
+        if (!videoEl || !isVideoMode) return;
+        audioMuted = !audioMuted;
+        videoEl.muted = audioMuted;
+        audioBtn.classList.toggle('active', !audioMuted);
+    }
+
+    audioBtn.addEventListener('click', toggleAudio);
+
+    /* ── Export ── */
+
+    function readCanvasPixels() {
+        if (Module && Module._app_frame) Module._app_frame();
+        var gl = canvas.getContext('webgl');
+        if (!gl) return null;
+        var w = canvas.width, h = canvas.height;
+        var pixels = new Uint8Array(w * h * 4);
+        gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+        return { pixels: pixels, w: w, h: h };
+    }
+
+    function triggerDownload(blob, filename) {
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        a.click();
+        setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+    }
+
+    function exportPNG() {
+        var data = readCanvasPixels();
+        if (!data) return;
+        var c2 = document.createElement('canvas');
+        c2.width = data.w; c2.height = data.h;
+        var ctx = c2.getContext('2d');
+        var img = ctx.createImageData(data.w, data.h);
+        for (var y = 0; y < data.h; y++) {
+            var srcRow = (data.h - 1 - y) * data.w * 4;
+            var dstRow = y * data.w * 4;
+            img.data.set(data.pixels.subarray(srcRow, srcRow + data.w * 4), dstRow);
+        }
+        ctx.putImageData(img, 0, 0);
+        c2.toBlob(function (blob) {
+            if (blob) triggerDownload(blob, 'glif-export.png');
+        }, 'image/png');
+    }
+
+    function exportPPM() {
+        var data = readCanvasPixels();
+        if (!data) return;
+        var w = data.w, h = data.h;
+        var header = 'P6\n' + w + ' ' + h + '\n255\n';
+        var headerBytes = new TextEncoder().encode(header);
+        var rgb = new Uint8Array(w * h * 3);
+        for (var y = 0; y < h; y++) {
+            var srcY = h - 1 - y;
+            for (var x = 0; x < w; x++) {
+                var si = (srcY * w + x) * 4;
+                var di = (y * w + x) * 3;
+                rgb[di] = data.pixels[si];
+                rgb[di + 1] = data.pixels[si + 1];
+                rgb[di + 2] = data.pixels[si + 2];
+            }
+        }
+        var blob = new Blob([headerBytes, rgb], { type: 'application/octet-stream' });
+        triggerDownload(blob, 'glif-export.ppm');
+    }
+
+    function base64Encode(bytes) {
+        var binary = '';
+        for (var i = 0; i < bytes.length; i++) {
+            binary += String.fromCharCode(bytes[i]);
+        }
+        return btoa(binary);
+    }
+
+    function exportSVG() {
+        if (!Module) return;
+        var rows = Module._app_get_grid_rows();
+        var cols = Module._app_get_grid_cols();
+        if (rows <= 0 || cols <= 0) return;
+        var cellW = Module._app_get_grid_cell_w();
+        var cellH = Module._app_get_grid_cell_h();
+
+        /* Read grid data */
+        var n = rows * cols;
+        var ptr = Module._malloc(n * 4);
+        Module._app_export_grid(ptr);
+        var buf = new Uint8Array(Module.HEAPU8.buffer, ptr, n * 4);
+        var grid = new Uint8Array(buf);
+        Module._free(ptr);
+
+        /* Read embedded font for SVG @font-face */
+        var fontB64 = '';
+        var fontPtr = Module._app_get_font_ptr();
+        var fontLen = Module._app_get_font_len();
+        if (fontPtr && fontLen > 0) {
+            var fontBytes = new Uint8Array(Module.HEAPU8.buffer, fontPtr, fontLen);
+            fontB64 = base64Encode(fontBytes);
+        }
+
+        var svgW = cols * cellW;
+        var svgH = rows * cellH;
+        var parts = [];
+        parts.push('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ' + svgW + ' ' + svgH + '">');
+        parts.push('<style>');
+        if (fontB64) {
+            parts.push("@font-face { font-family: 'GlifFont'; src: url(data:font/ttf;base64," + fontB64 + "); }");
+            parts.push("text { font-family: 'GlifFont'; font-size: " + cellH + "px; dominant-baseline: text-before-edge; }");
+        } else {
+            parts.push("text { font-family: monospace; font-size: " + cellH + "px; dominant-baseline: text-before-edge; }");
+        }
+        parts.push('</style>');
+        parts.push('<rect width="100%" height="100%" fill="#000"/>');
+
+        for (var r = 0; r < rows; r++) {
+            var y = r * cellH;
+            /* Group same-color runs to reduce file size */
+            var c = 0;
+            while (c < cols) {
+                var i = (r * cols + c) * 4;
+                var ch = grid[i];
+                if (ch === 32) { c++; continue; } /* skip spaces */
+                var cr = grid[i + 1], cg = grid[i + 2], cb = grid[i + 3];
+                var x = c * cellW;
+                parts.push('<text x="' + x + '" y="' + y + '" fill="rgb(' + cr + ',' + cg + ',' + cb + ')">');
+                /* Collect consecutive same-color non-space chars */
+                var run = '';
+                while (c < cols) {
+                    var j = (r * cols + c) * 4;
+                    var ch2 = grid[j];
+                    if (ch2 === 32 || grid[j + 1] !== cr || grid[j + 2] !== cg || grid[j + 3] !== cb) break;
+                    var char_str = String.fromCharCode(ch2);
+                    if (ch2 === 38) char_str = '&amp;';
+                    else if (ch2 === 60) char_str = '&lt;';
+                    else if (ch2 === 62) char_str = '&gt;';
+                    else if (ch2 === 34) char_str = '&quot;';
+                    run += char_str;
+                    c++;
+                }
+                parts.push(run + '</text>');
+            }
+        }
+        parts.push('</svg>');
+
+        var blob = new Blob([parts.join('\n')], { type: 'image/svg+xml' });
+        triggerDownload(blob, 'glif-export.svg');
+    }
+
+    function doExport() {
+        if (!hasContent) return;
+        var fmt = exportFormat.value;
+        if (fmt === 'ppm') exportPPM();
+        else if (fmt === 'svg') exportSVG();
+        else exportPNG();
+    }
+
+    exportBtn.addEventListener('click', doExport);
+
+    /* ── Fullscreen ── */
+
+    function toggleFullscreen() {
+        if (document.fullscreenElement) {
+            document.exitFullscreen();
+        } else {
+            appWrap.requestFullscreen().catch(function () {});
+        }
+    }
+
+    fullscreenBtn.addEventListener('click', toggleFullscreen);
+    document.addEventListener('fullscreenchange', function () { resize(); });
+
+    /* ── Video play/pause ── */
+
+    function togglePlayPause() {
+        if (!videoEl || !isVideoMode) return;
+        if (videoEl.paused) {
+            videoEl.play();
+        } else {
+            videoEl.pause();
+        }
+        syncPlayIcon();
+    }
+
+    playPauseBtn.addEventListener('click', togglePlayPause);
+
+    /* ── Progress bar seek ── */
+
+    progressWrap.addEventListener('click', function (e) {
+        if (!videoEl || !isVideoMode) return;
+        var rect = progressWrap.getBoundingClientRect();
+        var pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+        videoEl.currentTime = pct * (videoEl.duration || 0);
+        updateVideoUI();
+    });
+
+    /* ── Speed control ── */
+
+    speedSel.addEventListener('change', function () {
+        if (videoEl) videoEl.playbackRate = parseFloat(speedSel.value);
+    });
+
+    function cycleSpeed(dir) {
+        var opts = speedSel.options;
+        var idx = speedSel.selectedIndex + dir;
+        if (idx < 0) idx = 0;
+        if (idx >= opts.length) idx = opts.length - 1;
+        speedSel.selectedIndex = idx;
+        if (videoEl) videoEl.playbackRate = parseFloat(speedSel.value);
+    }
 
     /* ── File picking (triggered from C via EM_ASM) ── */
 
@@ -121,18 +562,48 @@
 
     /* ── Drag and drop ── */
 
-    canvas.addEventListener('dragover', function (e) { e.preventDefault(); });
-    canvas.addEventListener('drop', async function (e) {
+    /* Click on drop overlay opens file picker */
+    dropOverlay.addEventListener('click', function () {
+        pickFile('image/*,video/*,.gif', async function (file) {
+            if (file.type.startsWith('video/') || file.type === 'image/gif') {
+                startVideoFromFile(file);
+            } else if (file.type.startsWith('image/')) {
+                stopVideo();
+                if (originalImgSrc) URL.revokeObjectURL(originalImgSrc);
+                originalImgSrc = URL.createObjectURL(file);
+                var img = new Image();
+                img.onload = function () {
+                    sendImageToWasm(img);
+                    showControls(false);
+                };
+                img.src = originalImgSrc;
+            }
+        });
+    });
+
+    canvasArea.addEventListener('dragover', function (e) { e.preventDefault(); });
+    canvasArea.addEventListener('drop', async function (e) {
         e.preventDefault();
         const file = e.dataTransfer.files[0];
         if (!file) return;
 
+        /* Dismiss comparison if active */
+        if (compareOn) toggleCompare();
+
         if (file.type.startsWith('video/') || file.type === 'image/gif') {
+            if (originalImgSrc) { URL.revokeObjectURL(originalImgSrc); originalImgSrc = null; }
             startVideoFromFile(file);
         } else if (file.type.startsWith('image/')) {
+            stopVideo();
+            /* Keep a URL for comparison */
+            if (originalImgSrc) URL.revokeObjectURL(originalImgSrc);
+            originalImgSrc = URL.createObjectURL(file);
             const img = new Image();
-            img.onload = function () { sendImageToWasm(img); URL.revokeObjectURL(img.src); };
-            img.src = URL.createObjectURL(file);
+            img.onload = function () {
+                sendImageToWasm(img);
+                showControls(false);
+            };
+            img.src = originalImgSrc;
         } else if (file.name.match(/\.(ttf|otf|woff)$/i)) {
             const buf = await file.arrayBuffer();
             const bytes = new Uint8Array(buf);
@@ -159,31 +630,57 @@
     /* ── Video / webcam ── */
 
     function stopVideo() {
+        var wasCamera = !!videoStream;
         if (videoAnimId) { cancelAnimationFrame(videoAnimId); videoAnimId = null; }
         if (videoStream) { videoStream.getTracks().forEach(function (t) { t.stop(); }); videoStream = null; }
         if (videoEl) { videoEl.pause(); videoEl.remove(); videoEl = null; }
+        audioBtn.style.display = 'none';
+        isVideoMode = false;
+        /* If webcam was the only content, go back to drop overlay */
+        if (wasCamera && !originalImgSrc) {
+            hasContent = false;
+            controls.classList.add('hidden');
+            dropOverlay.classList.remove('hidden');
+            requestAnimationFrame(function () { resize(); });
+        } else if (hasContent) {
+            showControls(false);
+        }
     }
 
     function startVideoFeed(source) {
         stopVideo();
         videoEl = document.createElement('video');
-        videoEl.muted = true;
         videoEl.playsInline = true;
         videoEl.style.display = 'none';
         document.body.appendChild(videoEl);
 
-        if (source instanceof MediaStream) {
+        var isCamera = source instanceof MediaStream;
+
+        if (isCamera) {
             videoEl.srcObject = source;
             videoStream = source;
+            videoEl.muted = true;
         } else {
             videoEl.src = source;
             videoEl.loop = true;
+            videoEl.muted = audioMuted;
+            /* Show audio button for file-based video */
+            audioBtn.style.display = '';
+            audioBtn.classList.toggle('active', !audioMuted);
         }
         videoEl.play();
+
+        if (!isCamera) {
+            showControls(true);
+            syncPlayIcon();
+        } else {
+            showControls(false);
+        }
 
         const offscreen = document.createElement('canvas');
         const ctx = offscreen.getContext('2d', { willReadFrequently: true });
 
+        var uiTickCount = 0;
         function tick() {
             if (!videoEl || videoEl.readyState < 2) {
                 videoAnimId = requestAnimationFrame(tick);
@@ -198,7 +695,15 @@
             const ptr = Module._malloc(frame.data.length);
             Module.HEAPU8.set(frame.data, ptr);
             Module._app_video_frame(ptr, w, h);
+            if (compareOn) Module._app_upload_video_frame(ptr, w, h);
             Module._free(ptr);
+
+            /* Throttle DOM updates to ~10 fps to avoid layout thrashing */
+            if (isVideoMode && ++uiTickCount % 6 === 0) {
+                updateVideoUI();
+                syncPlayIcon();
+            }
+
             videoAnimId = requestAnimationFrame(tick);
         }
         videoAnimId = requestAnimationFrame(tick);
@@ -228,7 +733,8 @@
         await enumerateCameras();
         currentCamera = 0;
         try {
-            const constraints = cameras.length > 0
+            const hasKnownId = cameras.length > 0 && cameras[0].deviceId;
+            const constraints = hasKnownId
                 ? { video: { deviceId: { exact: cameras[0].deviceId } } }
                 : { video: { width: 640, height: 480 } };
             const stream = await navigator.mediaDevices.getUserMedia(constraints);
@@ -265,7 +771,6 @@
         Module = mod;
         const dpr = window.devicePixelRatio || 1;
         lastDpr = dpr;
-        /* Init before resize — app_resize depends on state set by app_init */
         Module._app_init(dpr, canvas.width, canvas.height);
         resize();
         requestAnimationFrame(frame);
