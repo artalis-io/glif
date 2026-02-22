@@ -459,27 +459,8 @@ void app_frame(void) {
     int logical_h = (int)((float)app.canvas_h / app.dpr);
     if (logical_w <= 0 || logical_h <= 0) return;
 
-    /* Compare drag handling (uses previous frame's content rect) */
     int mouse_down = (app.mouse_buttons & 1) != 0;
     int prev_down = (app.prev_mouse_buttons & 1) != 0;
-    if (app.compare_on && app.has_content && app.content_w > 0) {
-        if (mouse_down && !prev_down && !app.compare_dragging) {
-            float mx = (float)app.mouse_x;
-            float my = (float)app.mouse_y;
-            if (mx >= app.content_x && mx <= app.content_x + app.content_w &&
-                my >= app.content_y && my <= app.content_y + app.content_h) {
-                app.compare_dragging = 1;
-            }
-        }
-        if (app.compare_dragging && mouse_down) {
-            float rel = ((float)app.mouse_x - app.content_x) / app.content_w;
-            if (rel < 0.0f) rel = 0.0f;
-            if (rel > 1.0f) rel = 1.0f;
-            app.vp.split_pos = rel;
-        }
-    }
-    if (!mouse_down) app.compare_dragging = 0;
-    app.prev_mouse_buttons = app.mouse_buttons;
 
     /* Nuklear input (suppress during compare drag) */
     nk_input_begin(&app.nk);
@@ -500,6 +481,45 @@ void app_frame(void) {
     Clay_RenderCommandArray commands = Clay_EndLayout();
     /* Get bounds AFTER EndLayout computes positions */
     ui_layout_get_bounds(&layout);
+
+    /* Recompute content rect from current layout (before drag handler) */
+    if (app.has_result && layout.viewport.width > 0 &&
+        app.vp.atlas_cell_w > 0) {
+        int vp_w = (int)(layout.viewport.width * app.dpr);
+        int vp_h = (int)(layout.viewport.height * app.dpr);
+        float gpw = (float)app.grid.cols * (float)app.vp.atlas_cell_w;
+        float gph = (float)app.grid.rows * (float)app.vp.atlas_cell_h;
+        float sx = (float)vp_w / gpw;
+        float sy = (float)vp_h / gph;
+        float s = (sx < sy) ? sx : sy;
+        float rw = gpw * s, rh = gph * s;
+        app.content_x = layout.viewport.x +
+                         ((float)vp_w - rw) * 0.5f / app.dpr;
+        app.content_y = layout.viewport.y +
+                         ((float)vp_h - rh) * 0.5f / app.dpr;
+        app.content_w = rw / app.dpr;
+        app.content_h = rh / app.dpr;
+    }
+
+    /* Compare drag handling (uses current frame's content rect) */
+    if (app.compare_on && app.has_content && app.content_w > 0) {
+        if (mouse_down && !prev_down && !app.compare_dragging) {
+            float mx = (float)app.mouse_x;
+            float my = (float)app.mouse_y;
+            if (mx >= app.content_x && mx <= app.content_x + app.content_w &&
+                my >= app.content_y && my <= app.content_y + app.content_h) {
+                app.compare_dragging = 1;
+            }
+        }
+        if (app.compare_dragging && mouse_down) {
+            float rel = ((float)app.mouse_x - app.content_x) / app.content_w;
+            if (rel < 0.0f) rel = 0.0f;
+            if (rel > 1.0f) rel = 1.0f;
+            app.vp.split_pos = rel;
+        }
+    }
+    if (!mouse_down) app.compare_dragging = 0;
+    app.prev_mouse_buttons = app.mouse_buttons;
 
     /* Drop overlay: click anywhere in viewport opens file picker */
 #ifdef __EMSCRIPTEN__
