@@ -1,6 +1,7 @@
 #include "blip.h"
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
 
 /* ── Crushed PCM encoder ── */
 
@@ -17,7 +18,8 @@ int blip_encoder_init(BlipEncoder *be, int src_rate, int channels,
     be->channels = channels;
     be->resample_pos = 0.0;
 
-    /* Pre-allocate ~10 seconds of output */
+    /* Pre-allocate ~10 seconds of output (with overflow check) */
+    if (dst_rate > (int)(UINT32_MAX / 10)) return -1;
     be->cap = (uint32_t)dst_rate * 10;
     be->buf = malloc(be->cap);
     if (!be->buf) return -1;
@@ -28,9 +30,14 @@ int blip_encoder_init(BlipEncoder *be, int src_rate, int channels,
 
 /* Grow output buffer if needed */
 static int ensure_cap(BlipEncoder *be, uint32_t extra) {
-    if (be->len + extra <= be->cap) return 0;
-    uint32_t new_cap = be->cap * 2;
-    while (new_cap < be->len + extra) new_cap *= 2;
+    if (extra > UINT32_MAX - be->len) return -1; /* addition overflow */
+    uint32_t needed = be->len + extra;
+    if (needed <= be->cap) return 0;
+    uint32_t new_cap = be->cap;
+    while (new_cap < needed) {
+        if (new_cap > UINT32_MAX / 2) return -1; /* doubling overflow */
+        new_cap *= 2;
+    }
     uint8_t *nb = realloc(be->buf, new_cap);
     if (!nb) return -1;
     be->buf = nb;
@@ -96,6 +103,7 @@ void blip_encoder_feed(BlipEncoder *be, const int16_t *pcm, int samples) {
 }
 
 void blip_encoder_free(BlipEncoder *be) {
+    if (!be) return;
     free(be->buf);
     be->buf = NULL;
     be->len = 0;
@@ -103,9 +111,21 @@ void blip_encoder_free(BlipEncoder *be) {
 }
 
 const uint8_t *blip_encoder_data(const BlipEncoder *be) {
+    if (!be) return NULL;
     return be->buf;
 }
 
 uint32_t blip_encoder_samples(const BlipEncoder *be) {
+    if (!be) return 0;
     return be->len;
+}
+
+int blip_encoder_bit_depth(const BlipEncoder *be) {
+    if (!be) return 0;
+    return be->bit_depth;
+}
+
+int blip_encoder_dst_rate(const BlipEncoder *be) {
+    if (!be) return 0;
+    return be->dst_rate;
 }

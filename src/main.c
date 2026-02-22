@@ -569,7 +569,8 @@ static int run_video(Config *cfg) {
                     audio_file = NULL;
                 } else {
                     /* Read one video frame worth of PCM per iteration */
-                    audio_samples_per_frame = audio_sr / (int)cfg->fps;
+                    audio_samples_per_frame = (cfg->fps > 0.0f)
+                        ? audio_sr / (int)cfg->fps : audio_sr / 30;
                     audio_buf = malloc((size_t)audio_samples_per_frame *
                                        (size_t)audio_ch * sizeof(int16_t));
                     if (!audio_buf) {
@@ -734,12 +735,15 @@ static int run_video(Config *cfg) {
     if (audio_file) fclose(audio_file);
     free(audio_buf);
     if (gw.file) {
+        /* Capture audio stats before finish() frees the blip encoder */
+        uint32_t audio_sample_count = 0;
+        if (gw.blip) audio_sample_count = blip_encoder_samples(gw.blip);
         glif_writer_finish(&gw);
         fprintf(stderr, "Wrote %s (%u frames, %d×%d grid, %.1f fps",
                 cfg->glif_path, gw.frames, cols, rows, cfg->fps);
-        if (gw.blip && blip_encoder_samples(gw.blip) > 0)
+        if (audio_sample_count > 0)
             fprintf(stderr, ", %u audio samples @ %d Hz %d-bit",
-                    blip_encoder_samples(gw.blip), cfg->audio_rate, cfg->audio_depth);
+                    audio_sample_count, cfg->audio_rate, cfg->audio_depth);
         fprintf(stderr, ")\n");
     }
 #ifdef __linux__

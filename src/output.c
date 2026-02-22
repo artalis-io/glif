@@ -5,6 +5,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdarg.h>
+#include <limits.h>
 
 void glif_output_plain(const GlifGrid *grid) {
     for (int r = 0; r < grid->rows; r++) {
@@ -29,7 +31,9 @@ void glif_output_ansi(const GlifGrid *grid) {
 
 int glif_frame_diff_init(GlifFrameDiff *fd, int rows, int cols) {
     size_t cells = (size_t)rows * (size_t)cols;
+    if (cells > (size_t)INT_MAX) return -1;
     /* Worst case: every cell changed, ~48 bytes per cell + cursor moves */
+    if (cells > (SIZE_MAX - 32 - (size_t)rows * 8) / 64) return -1;
     fd->bufsize = cells * 64 + (size_t)rows * 8 + 32;
     fd->buf = malloc(fd->bufsize);
     if (!fd->buf) return -1;
@@ -40,6 +44,17 @@ int glif_frame_diff_init(GlifFrameDiff *fd, int rows, int cols) {
     return 0;
 }
 
+/* Advance p by snprintf result, clamped to available space (never past end). */
+static inline char *snprintf_adv(char *p, char *end, const char *fmt, ...) {
+    size_t rem = (p < end) ? (size_t)(end - p) : 0;
+    if (rem == 0) return p;
+    va_list ap;
+    va_start(ap, fmt);
+    int n = vsnprintf(p, rem, fmt, ap);
+    va_end(ap);
+    return (n > 0 && (size_t)n < rem) ? p + n : p + rem - 1;
+}
+
 /* Full redraw — cursor home, emit every cell sequentially. No cursor moves needed. */
 static void frame_full_redraw(GlifFrameDiff *fd, const GlifGrid *grid, int dark_mode) {
     char *p = fd->buf;
@@ -47,23 +62,26 @@ static void frame_full_redraw(GlifFrameDiff *fd, const GlifGrid *grid, int dark_
     int rows = grid->rows;
     int cols = grid->cols;
 
+    if (p + 3 > end) return;
     *p++ = '\033'; *p++ = '['; *p++ = 'H';
 
     for (int r = 0; r < rows; r++) {
         for (int c = 0; c < cols; c++) {
             const GlifGridCell *cell = &grid->cells[r * cols + c];
-            size_t rem = (size_t)(end - p);
             if (dark_mode) {
-                p += snprintf(p, rem, "\033[38;2;%d;%d;%dm%c",
-                              cell->r, cell->g, cell->b, cell->ch);
+                p = snprintf_adv(p, end, "\033[38;2;%d;%d;%dm%c",
+                                 cell->r, cell->g, cell->b, cell->ch);
             } else {
-                p += snprintf(p, rem, "\033[48;2;%d;%d;%dm\033[38;2;255;255;255m%c",
-                              cell->r, cell->g, cell->b, cell->ch);
+                p = snprintf_adv(p, end, "\033[48;2;%d;%d;%dm\033[38;2;255;255;255m%c",
+                                 cell->r, cell->g, cell->b, cell->ch);
             }
         }
+        if (p + 5 > end) break;
         *p++ = '\033'; *p++ = '['; *p++ = '0'; *p++ = 'm'; *p++ = '\n';
     }
-    *p++ = '\033'; *p++ = '['; *p++ = '0'; *p++ = 'm';
+    if (p + 4 <= end) {
+        *p++ = '\033'; *p++ = '['; *p++ = '0'; *p++ = 'm';
+    }
 
     if (fwrite(fd->buf, 1, (size_t)(p - fd->buf), stdout) != (size_t)(p - fd->buf))
         return;
@@ -135,18 +153,16 @@ void glif_frame_diff_render(GlifFrameDiff *fd, const GlifGrid *grid, int dark_mo
             prev[2] = cell->g;
             prev[3] = cell->b;
 
-            size_t rem = (size_t)(end - p);
             if (cursor_r != r || cursor_c != c) {
-                p += snprintf(p, rem, "\033[%d;%dH", r + 1, c + 1);
-                rem = (size_t)(end - p);
+                p = snprintf_adv(p, end, "\033[%d;%dH", r + 1, c + 1);
             }
 
             if (dark_mode) {
-                p += snprintf(p, rem, "\033[38;2;%d;%d;%dm%c",
-                              cell->r, cell->g, cell->b, cell->ch);
+                p = snprintf_adv(p, end, "\033[38;2;%d;%d;%dm%c",
+                                 cell->r, cell->g, cell->b, cell->ch);
             } else {
-                p += snprintf(p, rem, "\033[48;2;%d;%d;%dm\033[38;2;255;255;255m%c",
-                              cell->r, cell->g, cell->b, cell->ch);
+                p = snprintf_adv(p, end, "\033[48;2;%d;%d;%dm\033[38;2;255;255;255m%c",
+                                 cell->r, cell->g, cell->b, cell->ch);
             }
             cursor_r = r;
             cursor_c = c + 1;
@@ -154,8 +170,7 @@ void glif_frame_diff_render(GlifFrameDiff *fd, const GlifGrid *grid, int dark_mo
     }
 
     if (p > fd->buf) {
-        size_t rem = (size_t)(end - p);
-        p += snprintf(p, rem, "\033[0m");
+        p = snprintf_adv(p, end, "\033[0m");
         if (fwrite(fd->buf, 1, (size_t)(p - fd->buf), stdout) != (size_t)(p - fd->buf))
             return;
         fflush(stdout);
@@ -392,7 +407,13 @@ int glif_writer_init_v2(GlifWriter *gw, const char *path,
         return -1;
     }
     gw->frames = 0;
-    gw->cells = cols * rows;
+    size_t cell_count = (size_t)cols * (size_t)rows;
+    if (cell_count > (size_t)INT_MAX) {
+        fprintf(stderr, "error: grid too large (%d×%d)\n", cols, rows);
+        fclose(gw->file); gw->file = NULL;
+        return -1;
+    }
+    gw->cells = (int)cell_count;
     gw->cols = cols;
     gw->rows = rows;
     gw->err = 0;
@@ -599,43 +620,39 @@ void glif_writer_frame(GlifWriter *gw, const GlifGrid *grid) {
 
     /* Re-encode the winner into enc_buf (the selection loop may have
      * overwritten the buffer that held the winning encoding) */
+    int re_size = -1;
     switch (best_type) {
     case GLIF_FRAME_FILTERED_DEFLATE:
-        glif_compress_filtered_deflate_encode(gw->cur, gw->cols, gw->rows,
-                                              gw->enc_buf, gw->enc_cap);
-        best_data = gw->enc_buf;
+        re_size = glif_compress_filtered_deflate_encode(gw->cur, gw->cols, gw->rows,
+                                                        gw->enc_buf, gw->enc_cap);
         break;
     case GLIF_FRAME_DEFLATE:
-        glif_compress_deflate_encode(gw->cur, total, gw->enc_buf, gw->enc_cap);
-        best_data = gw->enc_buf;
+        re_size = glif_compress_deflate_encode(gw->cur, total, gw->enc_buf, gw->enc_cap);
         break;
     case GLIF_FRAME_PALETTE_DEFLATE:
-        glif_compress_palette_deflate_encode(gw->cur, total, gw->enc_buf, gw->enc_cap);
-        best_data = gw->enc_buf;
+        re_size = glif_compress_palette_deflate_encode(gw->cur, total, gw->enc_buf, gw->enc_cap);
         break;
     case GLIF_FRAME_PLANAR_DEFLATE:
-        glif_compress_planar_deflate_encode(gw->cur, total, gw->enc_buf, gw->enc_cap);
-        best_data = gw->enc_buf;
+        re_size = glif_compress_planar_deflate_encode(gw->cur, total, gw->enc_buf, gw->enc_cap);
         break;
     case GLIF_FRAME_DELTA_FILTERED_DEFLATE:
-        glif_compress_delta_filtered_deflate_encode(gw->cur, gw->prev, gw->cols, gw->rows,
-                                                    gw->enc_buf, gw->enc_cap);
-        best_data = gw->enc_buf;
+        re_size = glif_compress_delta_filtered_deflate_encode(gw->cur, gw->prev, gw->cols, gw->rows,
+                                                              gw->enc_buf, gw->enc_cap);
         break;
     case GLIF_FRAME_DELTA_DEFLATE:
-        glif_compress_delta_deflate_encode(gw->cur, gw->prev, total,
-                                           gw->work, gw->enc_buf, gw->enc_cap);
-        best_data = gw->enc_buf;
+        re_size = glif_compress_delta_deflate_encode(gw->cur, gw->prev, total,
+                                                     gw->work, gw->enc_buf, gw->enc_cap);
         break;
     case GLIF_FRAME_DELTA_PLANAR_DEFLATE:
-        glif_compress_delta_planar_deflate_encode(gw->cur, gw->prev, total,
-                                                  gw->enc_buf, gw->enc_cap);
-        best_data = gw->enc_buf;
+        re_size = glif_compress_delta_planar_deflate_encode(gw->cur, gw->prev, total,
+                                                            gw->enc_buf, gw->enc_cap);
         break;
     default:
-        best_data = gw->enc_buf;
         break;
     }
+    if (re_size <= 0) { gw->err = 1; return; }
+    best_data = gw->enc_buf;
+    best_size = re_size;
 
     /* Write 5-byte frame envelope: [type(u8), payload_size(u32 LE)] */
     if (write_u8(gw->file, best_type) != 0) { gw->err = 1; return; }
@@ -672,7 +689,7 @@ static void write_blip_section(GlifWriter *gw) {
     uint32_t raw_size = num_samples;
     uint8_t *packed = NULL;
 
-    if (gw->blip->bit_depth == 4) {
+    if (blip_encoder_bit_depth(gw->blip) == 4) {
         raw_size = (num_samples + 1) / 2;
         packed = malloc(raw_size);
         if (!packed) { gw->err = 1; return; }
@@ -697,8 +714,8 @@ static void write_blip_section(GlifWriter *gw) {
     int e = 0;
     e |= (fwrite(BLIP_MAGIC, 1, 4, gw->file) != 4) ? -1 : 0;
     e |= write_u8(gw->file, BLIP_VERSION);
-    e |= write_u8(gw->file, (uint8_t)gw->blip->bit_depth);
-    e |= write_u16(gw->file, (uint16_t)gw->blip->dst_rate);
+    e |= write_u8(gw->file, (uint8_t)blip_encoder_bit_depth(gw->blip));
+    e |= write_u16(gw->file, (uint16_t)blip_encoder_dst_rate(gw->blip));
     e |= write_u32(gw->file, num_samples);
     e |= write_u32(gw->file, (uint32_t)comp_len);
     if (!e) {

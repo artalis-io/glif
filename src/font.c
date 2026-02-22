@@ -169,8 +169,7 @@ int glif_char_db_create(GlifCharDatabase *db, const char *font_path,
     db->cell_w = cell_w;
     db->cell_h = cell_h;
 
-    size_t font_size;
-    db->font_data = read_file(font_path, &font_size);
+    db->font_data = read_file(font_path, NULL);
     if (!db->font_data) {
         fprintf(stderr, "error: failed to read font file '%s'\n", font_path);
         return -1;

@@ -158,9 +158,12 @@ int glif_reader_open(GlifReader *gr, const uint8_t *data, size_t len) {
                 if (pos + 20 <= len) {
                     uint16_t palette_size = rd_u16(data + pos + 6);
                     uint32_t frame_count = rd_u32(data + pos + 16);
-                    pos += 20;
-                    pos += (size_t)palette_size * 8;
-                    pos += (size_t)frame_count * 4;
+                    size_t skip = 20 + (size_t)palette_size * 8
+                                     + (size_t)frame_count * 4;
+                    if (pos + skip <= len)
+                        pos += skip;
+                    else
+                        pos = len; /* truncated — stop parsing */
                 }
             }
         }

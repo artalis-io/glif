@@ -130,9 +130,7 @@ int main(int argc, char **argv) {
     uint8_t *flat = malloc(buf_size);
     flatten_grid(&grid, flat);
 
-    size_t rle_bound = glif_compress_rle_bound(cells);
-    size_t delta_bound = glif_compress_delta_bound(cells);
-    size_t enc_cap = rle_bound > delta_bound ? rle_bound : delta_bound;
+    size_t enc_cap = glif_compress_deflate_bound(cells);
     uint8_t *enc_buf = malloc(enc_cap);
     uint8_t *dec_buf = malloc(buf_size);
     uint8_t *work_buf = malloc(buf_size);
@@ -141,40 +139,29 @@ int main(int argc, char **argv) {
     int enc_iters = 1000;
     printf("\n=== Encode/decode (%d iterations) ===\n", enc_iters);
 
-    /* RLE */
-    int rle_size = glif_compress_rle_encode(flat, cells, enc_buf, enc_cap);
+    /* Deflate */
+    int deflate_size = glif_compress_deflate_encode(flat, cells, enc_buf, enc_cap);
     t0 = now_ms();
     for (int i = 0; i < enc_iters; i++) {
-        glif_compress_rle_encode(flat, cells, enc_buf, enc_cap);
-        glif_compress_rle_decode(enc_buf, (size_t)rle_size, dec_buf, cells);
+        glif_compress_deflate_encode(flat, cells, enc_buf, enc_cap);
+        glif_compress_deflate_decode(enc_buf, (size_t)deflate_size, dec_buf, cells);
     }
     t1 = now_ms();
-    printf("RLE:            %5d bytes  (%.1f%%)  %6.2f ms\n",
-           rle_size, 100.0 * rle_size / (double)buf_size, (t1 - t0) / enc_iters);
+    printf("Deflate:        %5d bytes  (%.1f%%)  %6.2f ms\n",
+           deflate_size, 100.0 * deflate_size / (double)buf_size, (t1 - t0) / enc_iters);
 
-    /* Delta (vs zeroed prev) */
-    int delta_size = glif_compress_delta_encode(flat, zeroed, cells, enc_buf, enc_cap);
+    /* Delta+Deflate (vs zeroed prev) */
+    int dd_size = glif_compress_delta_deflate_encode(flat, zeroed, cells,
+                                                      work_buf, enc_buf, enc_cap);
     t0 = now_ms();
     for (int i = 0; i < enc_iters; i++) {
-        glif_compress_delta_encode(flat, zeroed, cells, enc_buf, enc_cap);
-        glif_compress_delta_decode(enc_buf, (size_t)delta_size, zeroed, dec_buf, cells);
+        glif_compress_delta_deflate_encode(flat, zeroed, cells, work_buf, enc_buf, enc_cap);
+        glif_compress_delta_deflate_decode(enc_buf, (size_t)dd_size, zeroed,
+                                            work_buf, dec_buf, cells);
     }
     t1 = now_ms();
-    printf("Delta:          %5d bytes  (%.1f%%)  %6.2f ms\n",
-           delta_size, 100.0 * delta_size / (double)buf_size, (t1 - t0) / enc_iters);
-
-    /* Delta+RLE (vs zeroed prev) */
-    int drle_size = glif_compress_delta_rle_encode(flat, zeroed, cells,
-                                                    work_buf, enc_buf, enc_cap);
-    t0 = now_ms();
-    for (int i = 0; i < enc_iters; i++) {
-        glif_compress_delta_rle_encode(flat, zeroed, cells, work_buf, enc_buf, enc_cap);
-        glif_compress_delta_rle_decode(enc_buf, (size_t)drle_size, zeroed,
-                                       work_buf, dec_buf, cells);
-    }
-    t1 = now_ms();
-    printf("Delta+RLE:      %5d bytes  (%.1f%%)  %6.2f ms\n",
-           drle_size, 100.0 * drle_size / (double)buf_size, (t1 - t0) / enc_iters);
+    printf("Delta+Deflate:  %5d bytes  (%.1f%%)  %6.2f ms\n",
+           dd_size, 100.0 * dd_size / (double)buf_size, (t1 - t0) / enc_iters);
 
     printf("Raw:            %5d bytes\n", (int)buf_size);
 
@@ -203,22 +190,19 @@ int main(int argc, char **argv) {
         t1 = now_ms();
         total += (t1 - t0);
 
-        /* GLIF streaming: flatten + try all encodings + pick best */
+        /* GLIF streaming: flatten + try deflate encodings + pick best */
         double ts0 = now_ms();
         int c = g.rows * g.cols;
         flatten_grid(&g, flat);
 
         int best = (int)buf_size;
-        glif_compress_rle_encode(flat, c, enc_buf, enc_cap);
-        int rs = glif_compress_rle_encode(flat, c, enc_buf, enc_cap);
-        if (rs > 0 && rs < best) best = rs;
+        int ds = glif_compress_deflate_encode(flat, c, enc_buf, enc_cap);
+        if (ds > 0 && ds < best) best = ds;
 
         if (run > 0) {
-            int ds = glif_compress_delta_encode(flat, zeroed, c, enc_buf, enc_cap);
-            if (ds > 0 && ds < best) best = ds;
-            int drs = glif_compress_delta_rle_encode(flat, zeroed, c,
-                                                      work_buf, enc_buf, enc_cap);
-            if (drs > 0 && drs < best) best = drs;
+            int dds = glif_compress_delta_deflate_encode(flat, zeroed, c,
+                                                          work_buf, enc_buf, enc_cap);
+            if (dds > 0 && dds < best) best = dds;
         }
         memcpy(zeroed, flat, buf_size);
 
