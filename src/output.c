@@ -201,6 +201,8 @@ int glif_output_ppm(const GlifGrid *grid, const GlifCharDatabase *db,
         if (!render_bmps) return -1;
     }
 
+    if (img_w > 0 && img_h > SIZE_MAX / img_w) return -1;
+    if (img_w * img_h > SIZE_MAX / 3) return -1;
     uint8_t *pixels = calloc(img_w * img_h * 3, 1);
     if (!pixels) {
         if (render_bmps) {
@@ -419,6 +421,8 @@ int glif_ppm_pipe_init(GlifPpmPipe *pp, const GlifGrid *grid, const GlifCharData
     pp->img_w = (size_t)grid->cols * (size_t)pp->rw;
     pp->img_h = (size_t)grid->rows * (size_t)pp->rh;
 
+    if (pp->img_w > 0 && pp->img_h > SIZE_MAX / pp->img_w) return -1;
+    if (pp->img_w * pp->img_h > SIZE_MAX / 3) return -1;
     pp->pixels = calloc(pp->img_w * pp->img_h, 3);
     if (!pp->pixels) return -1;
 

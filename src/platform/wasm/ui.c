@@ -119,6 +119,16 @@ static struct {
     int compare_on;          /* Compare toggle state */
     int compare_dragging;    /* Currently dragging compare split */
     int prev_mouse_buttons;  /* Previous frame's mouse buttons */
+    int show_help;           /* Help modal visible */
+
+    /* Download overlay */
+    int download_state;      /* 0=none, 1=downloading, 2=error */
+    float download_progress; /* 0.0–1.0 */
+
+    /* Pre-allocated render buffers (resized on grid dim change) */
+    uint8_t *render_char;    /* ncells bytes */
+    uint8_t *render_color;   /* ncells * 3 bytes */
+    int render_ncells;       /* current allocation size */
 } app;
 
 /* Compute cell dimensions from image size and resolution mode.
@@ -194,23 +204,35 @@ static void vp_render(const GlifGrid *grid, Clay_BoundingBox bounds) {
     int rows = grid->rows;
     int ncells = rows * cols;
 
-    /* Upload char grid */
-    uint8_t *char_data = malloc((size_t)ncells);
-    if (!char_data) return;
-    for (int i = 0; i < ncells; i++)
-        char_data[i] = (uint8_t)(grid->cells[i].ch - 32);
-
-    uint8_t *color_data = calloc((size_t)ncells, 3);
-    if (!color_data) { free(char_data); return; }
-    for (int i = 0; i < ncells; i++) {
-        color_data[i * 3 + 0] = grid->cells[i].r;
-        color_data[i * 3 + 1] = grid->cells[i].g;
-        color_data[i * 3 + 2] = grid->cells[i].b;
+    /* Resize render buffers if grid dims changed */
+    if (ncells != app.render_ncells) {
+        free(app.render_char);
+        free(app.render_color);
+        app.render_char = malloc((size_t)ncells);
+        app.render_color = malloc((size_t)ncells * 3);
+        if (!app.render_char || !app.render_color) {
+            free(app.render_char);
+            free(app.render_color);
+            app.render_char = NULL;
+            app.render_color = NULL;
+            app.render_ncells = 0;
+            return;
+        }
+        app.render_ncells = ncells;
     }
 
-    vp_upload(&app.vp, char_data, color_data, cols, rows);
-    free(char_data);
-    free(color_data);
+    /* Upload char grid */
+    for (int i = 0; i < ncells; i++)
+        app.render_char[i] = (grid->cells[i].ch >= 32)
+                            ? (uint8_t)(grid->cells[i].ch - 32) : 0;
+
+    for (int i = 0; i < ncells; i++) {
+        app.render_color[i * 3 + 0] = grid->cells[i].r;
+        app.render_color[i * 3 + 1] = grid->cells[i].g;
+        app.render_color[i * 3 + 2] = grid->cells[i].b;
+    }
+
+    vp_upload(&app.vp, app.render_char, app.render_color, cols, rows);
 
     /* Viewport scissor (physical pixels) */
     int vp_x = (int)(bounds.x * app.dpr);
@@ -397,6 +419,14 @@ void app_init(float dpr, int canvas_w, int canvas_h) {
     app.prev_hi_res = app.hi_res;
     app.prev_stabilize = app.stabilize;
 
+#ifdef __EMSCRIPTEN__
+    EM_ASM({
+        if (!localStorage.getItem('glif_help_seen')) {
+            if (Module._app_toggle_help) Module._app_toggle_help();
+        }
+    });
+#endif
+
     app.initialized = 1;
 }
 
@@ -523,7 +553,7 @@ void app_frame(void) {
 
     /* Drop overlay: click anywhere in viewport opens file picker */
 #ifdef __EMSCRIPTEN__
-    if (!app.has_content && mouse_down && !prev_down) {
+    if (!app.has_content && !app.download_state && mouse_down && !prev_down) {
         float mx = (float)app.mouse_x;
         float my = (float)app.mouse_y;
         if (mx >= layout.viewport.x &&
@@ -582,7 +612,7 @@ void app_frame(void) {
                 nk_property_float(&app.nk, "Edge", 0.0f, &app.dir_crunch, 10.0f, 0.05f, 0.05f);
                 nk_property_float(&app.nk, "Contrast", 0.0f, &app.global_crunch, 10.0f, 0.05f, 0.05f);
 
-                nk_layout_row_dynamic(&app.nk, 28, 4);
+                nk_layout_row_dynamic(&app.nk, 28, 5);
                 nk_checkbox_label(&app.nk, "Adaptive", &app.adaptive_on);
                 nk_checkbox_label(&app.nk, "Stable", &app.stabilize);
                 if (nk_button_label(&app.nk, app.hi_res ? "Hi Res" : "Lo Res"))
@@ -591,13 +621,15 @@ void app_frame(void) {
                 if (nk_button_label(&app.nk, "Camera"))
                     EM_ASM({ if (window.glifToggleCamera) window.glifToggleCamera(); });
 #endif
+                if (nk_button_label(&app.nk, "?"))
+                    app.show_help = !app.show_help;
             } else if (layout.toolbar_wrap) {
                 /* Medium width: 2 rows */
                 nk_layout_row_dynamic(&app.nk, 24, 2);
                 nk_property_float(&app.nk, "Edge", 0.0f, &app.dir_crunch, 10.0f, 0.05f, 0.05f);
                 nk_property_float(&app.nk, "Contrast", 0.0f, &app.global_crunch, 10.0f, 0.05f, 0.05f);
 
-                nk_layout_row_dynamic(&app.nk, 24, 4);
+                nk_layout_row_dynamic(&app.nk, 24, 5);
                 nk_checkbox_label(&app.nk, "Adaptive", &app.adaptive_on);
                 nk_checkbox_label(&app.nk, "Stable", &app.stabilize);
                 if (nk_button_label(&app.nk, app.hi_res ? "Hi Res" : "Lo Res"))
@@ -608,9 +640,11 @@ void app_frame(void) {
 #else
                 nk_button_label(&app.nk, "Webcam");
 #endif
+                if (nk_button_label(&app.nk, "?"))
+                    app.show_help = !app.show_help;
             } else {
                 /* Wide desktop: single row */
-                nk_layout_row_dynamic(&app.nk, 28, 6);
+                nk_layout_row_dynamic(&app.nk, 28, 7);
                 nk_property_float(&app.nk, "Edge", 0.0f, &app.dir_crunch, 10.0f, 0.05f, 0.05f);
                 nk_property_float(&app.nk, "Contrast", 0.0f, &app.global_crunch, 10.0f, 0.05f, 0.05f);
                 nk_checkbox_label(&app.nk, "Adaptive", &app.adaptive_on);
@@ -624,6 +658,8 @@ void app_frame(void) {
 #else
                 nk_button_label(&app.nk, "Webcam");
 #endif
+                if (nk_button_label(&app.nk, "?"))
+                    app.show_help = !app.show_help;
             }
         }
         nk_end(&app.nk);
@@ -847,6 +883,137 @@ void app_frame(void) {
         nk_style_pop_style_item(&app.nk);
     }
 
+    /* Help modal */
+    if (app.show_help && layout.viewport.width > 0 && layout.viewport.height > 0) {
+        float hw = 340, hh = 420;
+        float hx = layout.viewport.x + (layout.viewport.width - hw) * 0.5f;
+        float hy = layout.viewport.y + (layout.viewport.height - hh) * 0.5f;
+        struct nk_rect help_rect = nk_rect(hx, hy, hw, hh);
+        nk_window_set_bounds(&app.nk, "Help", help_rect);
+
+        nk_style_push_style_item(&app.nk, &app.nk.style.window.fixed_background,
+            nk_style_item_color(nk_rgba(30, 30, 30, 230)));
+        nk_style_push_vec2(&app.nk, &app.nk.style.window.padding, nk_vec2(20, 16));
+        nk_style_push_vec2(&app.nk, &app.nk.style.window.spacing, nk_vec2(0, 4));
+
+        if (nk_begin(&app.nk, "Help", help_rect,
+                     NK_WINDOW_NO_SCROLLBAR | NK_WINDOW_BORDER)) {
+            /* Title */
+            nk_layout_row_dynamic(&app.nk, 22, 1);
+            nk_style_push_color(&app.nk, &app.nk.style.text.color,
+                                nk_rgb(255, 255, 255));
+            nk_label(&app.nk, "Getting Started", NK_TEXT_LEFT);
+            nk_style_pop_color(&app.nk);
+
+            /* Description */
+            nk_style_push_color(&app.nk, &app.nk.style.text.color,
+                                nk_rgb(160, 160, 160));
+
+            nk_layout_row_dynamic(&app.nk, 14, 1);
+            nk_label(&app.nk, "", NK_TEXT_LEFT);
+            nk_layout_row_dynamic(&app.nk, 14, 1);
+            nk_label(&app.nk, "Drop an image or video onto the", NK_TEXT_LEFT);
+            nk_layout_row_dynamic(&app.nk, 14, 1);
+            nk_label(&app.nk, "canvas, or paste a YouTube URL.", NK_TEXT_LEFT);
+
+            /* Shortcuts header */
+            nk_layout_row_dynamic(&app.nk, 14, 1);
+            nk_label(&app.nk, "", NK_TEXT_LEFT);
+            nk_style_push_color(&app.nk, &app.nk.style.text.color,
+                                nk_rgb(255, 255, 255));
+            nk_layout_row_dynamic(&app.nk, 16, 1);
+            nk_label(&app.nk, "Keyboard Shortcuts", NK_TEXT_LEFT);
+            nk_style_pop_color(&app.nk);
+
+            nk_layout_row_dynamic(&app.nk, 14, 1);
+            nk_label(&app.nk, "", NK_TEXT_LEFT);
+
+            /* Shortcut list */
+            nk_layout_row_dynamic(&app.nk, 16, 1);
+            nk_label(&app.nk, "C       Compare original / ASCII", NK_TEXT_LEFT);
+            nk_layout_row_dynamic(&app.nk, 16, 1);
+            nk_label(&app.nk, "H       Toggle HDR enhancement", NK_TEXT_LEFT);
+            nk_layout_row_dynamic(&app.nk, 16, 1);
+            nk_label(&app.nk, "S       Export current frame", NK_TEXT_LEFT);
+            nk_layout_row_dynamic(&app.nk, 16, 1);
+            nk_label(&app.nk, "F       Toggle fullscreen", NK_TEXT_LEFT);
+            nk_layout_row_dynamic(&app.nk, 16, 1);
+            nk_label(&app.nk, "Space   Play / pause video", NK_TEXT_LEFT);
+            nk_layout_row_dynamic(&app.nk, 16, 1);
+            nk_label(&app.nk, "A       Mute / unmute audio", NK_TEXT_LEFT);
+            nk_layout_row_dynamic(&app.nk, 16, 1);
+            nk_label(&app.nk, "< / >   Seek +/-5s", NK_TEXT_LEFT);
+            nk_layout_row_dynamic(&app.nk, 16, 1);
+            nk_label(&app.nk, "Esc     Clear content", NK_TEXT_LEFT);
+            nk_layout_row_dynamic(&app.nk, 16, 1);
+            nk_label(&app.nk, "?       Show this help", NK_TEXT_LEFT);
+
+            nk_style_pop_color(&app.nk);
+
+            /* "Got it" button */
+            nk_layout_row_dynamic(&app.nk, 8, 1);
+            nk_label(&app.nk, "", NK_TEXT_LEFT);
+            nk_layout_row_dynamic(&app.nk, 28, 1);
+            if (nk_button_label(&app.nk, "Got it")) {
+                app.show_help = 0;
+#ifdef __EMSCRIPTEN__
+                EM_ASM({ if (window.glifMarkHelpSeen) window.glifMarkHelpSeen(); });
+#endif
+            }
+        }
+        nk_end(&app.nk);
+
+        nk_style_pop_vec2(&app.nk);
+        nk_style_pop_vec2(&app.nk);
+        nk_style_pop_style_item(&app.nk);
+    }
+
+    /* Download overlay */
+    if (app.download_state > 0 && layout.viewport.width > 0 && layout.viewport.height > 0) {
+        float dw = 300, dh = 80;
+        float dx = layout.viewport.x + (layout.viewport.width - dw) * 0.5f;
+        float dy = layout.viewport.y + (layout.viewport.height - dh) * 0.5f;
+        struct nk_rect dl_rect = nk_rect(dx, dy, dw, dh);
+        nk_window_set_bounds(&app.nk, "Download", dl_rect);
+
+        nk_style_push_style_item(&app.nk, &app.nk.style.window.fixed_background,
+            nk_style_item_color(nk_rgba(30, 30, 30, 230)));
+        nk_style_push_vec2(&app.nk, &app.nk.style.window.padding, nk_vec2(16, 12));
+        nk_style_push_vec2(&app.nk, &app.nk.style.window.spacing, nk_vec2(0, 6));
+
+        if (nk_begin(&app.nk, "Download", dl_rect,
+                     NK_WINDOW_NO_SCROLLBAR | NK_WINDOW_BORDER | NK_WINDOW_NO_INPUT)) {
+            if (app.download_state == 1) {
+                /* Waiting for user to click → share tab */
+                nk_layout_row_dynamic(&app.nk, 18, 1);
+                nk_style_push_color(&app.nk, &app.nk.style.text.color,
+                                    nk_rgb(200, 200, 200));
+                nk_label(&app.nk, "Click to share YouTube tab",
+                         NK_TEXT_CENTERED);
+                nk_style_pop_color(&app.nk);
+
+                nk_layout_row_dynamic(&app.nk, 16, 1);
+                nk_style_push_color(&app.nk, &app.nk.style.text.color,
+                                    nk_rgb(120, 120, 120));
+                nk_label(&app.nk, "Pick the tab where the video is playing",
+                         NK_TEXT_CENTERED);
+                nk_style_pop_color(&app.nk);
+            } else {
+                /* Error */
+                nk_layout_row_dynamic(&app.nk, 18, 1);
+                nk_style_push_color(&app.nk, &app.nk.style.text.color,
+                                    nk_rgb(255, 80, 80));
+                nk_label(&app.nk, "Download failed", NK_TEXT_CENTERED);
+                nk_style_pop_color(&app.nk);
+            }
+        }
+        nk_end(&app.nk);
+
+        nk_style_pop_vec2(&app.nk);
+        nk_style_pop_vec2(&app.nk);
+        nk_style_pop_style_item(&app.nk);
+    }
+
     /* Detect parameter changes and rebuild/reprocess as needed */
     if (app.hi_res != app.prev_hi_res) {
         app.prev_hi_res = app.hi_res;
@@ -976,7 +1143,11 @@ void app_load_font(const uint8_t *data, int len) {
 
 EMSCRIPTEN_KEEPALIVE
 void app_load_image(const uint8_t *data, int w, int h, int channels) {
-    size_t size = (size_t)w * (size_t)h * (size_t)channels;
+    if (w <= 0 || h <= 0 || channels <= 0) return;
+    if ((size_t)w > SIZE_MAX / (size_t)h) return;
+    size_t wh = (size_t)w * (size_t)h;
+    if (wh > SIZE_MAX / (size_t)channels) return;
+    size_t size = wh * (size_t)channels;
     free(app.pending_pixels);
     app.pending_pixels = malloc(size);
     if (!app.pending_pixels) return;
@@ -1097,4 +1268,39 @@ void app_toggle_hdr(void) {
 EMSCRIPTEN_KEEPALIVE
 void app_toggle_compare(void) {
     toggle_compare_mode();
+}
+
+EMSCRIPTEN_KEEPALIVE
+void app_toggle_help(void) {
+    app.show_help = !app.show_help;
+}
+
+EMSCRIPTEN_KEEPALIVE
+void app_clear_content(void) {
+    if (app.has_result) {
+        glif_grid_free(&app.grid);
+        app.has_result = 0;
+    }
+    free(app.pending_pixels);
+    app.pending_pixels = NULL;
+    app.pending_w = app.pending_h = app.pending_channels = 0;
+    app.pending_dirty = 0;
+    app.has_content = 0;
+    app.video_mode = 0;
+    if (app.compare_on) {
+        app.compare_on = 0;
+        app.vp.compare_mode = 0;
+        app.compare_dragging = 0;
+    }
+    /* Reset smoothers */
+    glif_norm_smoother_init(&app.norm_sm);
+    glif_shape_smoother_free(&app.shape_sm);
+    glif_contrast_smoother_init(&app.contrast_sm);
+    glif_match_smoother_free(&app.match_sm);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void app_set_download_state(int state, float progress) {
+    app.download_state = state;
+    app.download_progress = progress;
 }

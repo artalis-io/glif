@@ -16,6 +16,11 @@
     const appWrap = document.getElementById('appWrap');
     const canvasArea = document.getElementById('canvasArea');
 
+    /* Make canvas focusable so paste events fire */
+    canvas.tabIndex = 0;
+    canvas.style.outline = 'none';
+    canvas.focus();
+
     let Module = null;
     let cameras = [];
     let currentCamera = -1;
@@ -83,7 +88,7 @@
     }
 
     canvas.addEventListener('mousemove', mouseHandler);
-    canvas.addEventListener('mousedown', mouseHandler);
+    canvas.addEventListener('mousedown', function (e) { canvas.focus(); mouseHandler(e); });
     canvas.addEventListener('mouseup', mouseHandler);
 
     /* Ensure C gets mouseup even when released outside canvas (for compare drag) */
@@ -131,6 +136,9 @@
         if (e.target.tagName === 'SELECT') return;
         if (Module) Module._app_key(e.keyCode, 1);
 
+        /* Don't intercept shortcuts when Ctrl/Cmd is held (allow paste etc) */
+        if (e.ctrlKey || e.metaKey) return;
+
         switch (e.key) {
             case 's': case 'S':
                 if (hasContent) doExport();
@@ -161,6 +169,17 @@
             case 'ArrowRight':
                 if (isVideoMode && videoEl) {
                     videoEl.currentTime = Math.min(videoEl.duration || 0, videoEl.currentTime + 5);
+                }
+                break;
+            case '?':
+                if (Module && Module._app_toggle_help) Module._app_toggle_help();
+                break;
+            case 'Escape':
+                if (pendingYtUrl) {
+                    pendingYtUrl = null;
+                    if (Module) Module._app_set_download_state(0, 0.0);
+                } else if (hasContent) {
+                    clearContent();
                 }
                 break;
         }
@@ -221,6 +240,10 @@
         }
     }
     window.glifToggleFullscreen = toggleFullscreen;
+
+    window.glifMarkHelpSeen = function () {
+        localStorage.setItem('glif_help_seen', '1');
+    };
 
     document.addEventListener('fullscreenchange', function () { resize(); });
 
@@ -486,20 +509,36 @@
 
     function stopVideo() {
         var wasCamera = !!videoStream;
+        var wasCapture = videoEl && videoEl.srcObject &&
+            !videoStream && videoEl.srcObject.getVideoTracks().length > 0;
         if (videoAnimId) { cancelAnimationFrame(videoAnimId); videoAnimId = null; }
         if (videoStream) { videoStream.getTracks().forEach(function (t) { t.stop(); }); videoStream = null; }
-        if (videoEl) { videoEl.pause(); videoEl.remove(); videoEl = null; }
+        if (videoEl) {
+            if (videoEl.srcObject) {
+                videoEl.srcObject.getTracks().forEach(function (t) { t.stop(); });
+            }
+            videoEl.pause();
+            videoEl.remove();
+            videoEl = null;
+        }
         audioAvailable = false;
         isVideoMode = false;
-        /* If webcam was the only content, go back to drop overlay */
-        if (wasCamera && !originalImgSrc) {
-            hasContent = false;
-            if (Module && Module._app_set_content_mode)
-                Module._app_set_content_mode(0, 0);
-            requestAnimationFrame(function () { resize(); });
+        /* If webcam or screen capture was the only content, clear everything */
+        if ((wasCamera || wasCapture) && !originalImgSrc) {
+            clearContent();
         } else if (hasContent) {
             showControls(false);
         }
+    }
+
+    function clearContent() {
+        stopVideo();
+        if (originalImgSrc) { URL.revokeObjectURL(originalImgSrc); originalImgSrc = null; }
+        hasContent = false;
+        isVideoMode = false;
+        compareOn = false;
+        if (Module && Module._app_clear_content) Module._app_clear_content();
+        requestAnimationFrame(function () { resize(); });
     }
 
     function startVideoFeed(source) {
@@ -509,13 +548,23 @@
         videoEl.style.display = 'none';
         document.body.appendChild(videoEl);
 
-        var isCamera = source instanceof MediaStream;
+        var isStream = source instanceof MediaStream;
+        var isDisplay = isStream &&
+            source.getVideoTracks()[0] &&
+            source.getVideoTracks()[0].getSettings().displaySurface;
+        var isCamera = isStream && !isDisplay;
 
-        if (isCamera) {
+        if (isStream) {
             videoEl.srcObject = source;
-            videoStream = source;
-            videoEl.muted = true;
-            audioAvailable = false;
+            videoStream = isCamera ? source : null;
+            if (isDisplay) {
+                var hasAudio = source.getAudioTracks().length > 0;
+                videoEl.muted = hasAudio ? audioMuted : true;
+                audioAvailable = hasAudio;
+            } else {
+                videoEl.muted = true;
+                audioAvailable = false;
+            }
         } else {
             videoEl.src = source;
             videoEl.loop = true;
@@ -617,6 +666,89 @@
             console.error('Camera switch error:', e);
         }
     };
+
+    /* ── YouTube paste → download → play ── */
+
+    function parseYouTubeUrl(url) {
+        var m = url.match(
+            /(?:youtube\.com\/(?:watch\?.*v=|shorts\/|embed\/|live\/)|youtu\.be\/)([\w-]{11})/
+        );
+        return m ? m[1] : null;
+    }
+
+    var pendingYtUrl = null;
+
+    var ytPopup = null;
+
+    function downloadAndPlay(url) {
+        if (!Module) return;
+        var ytId = parseYouTubeUrl(url);
+        if (!ytId) return;
+
+        /* Open YouTube in a popup */
+        var embedUrl = 'https://www.youtube.com/embed/' + ytId + '?autoplay=1&rel=0';
+        if (ytPopup && !ytPopup.closed) ytPopup.close();
+        ytPopup = window.open(embedUrl, 'glif_yt', 'width=854,height=480');
+
+        pendingYtUrl = url;
+        Module._app_set_download_state(1, 0.0);
+    }
+
+    /* Step 2: click triggers getDisplayMedia (needs user activation) */
+    async function startYtCapture() {
+        pendingYtUrl = null;
+        try {
+            var opts = { video: true, audio: true };
+            var controller = null;
+            if (typeof CaptureController !== 'undefined') {
+                controller = new CaptureController();
+                opts.controller = controller;
+            }
+
+            var stream = await navigator.mediaDevices.getDisplayMedia(opts);
+
+            /* Prevent Chrome from focusing the captured tab */
+            if (controller) {
+                try { controller.setFocusBehavior('no-focus-change'); } catch (e) {}
+            }
+
+            Module._app_set_download_state(0, 0.0);
+            startVideoFeed(stream);
+
+            /* Close popup + stop video when user ends screen sharing */
+            stream.getVideoTracks()[0].addEventListener('ended', function () {
+                if (ytPopup && !ytPopup.closed) ytPopup.close();
+                ytPopup = null;
+                stopVideo();
+            });
+        } catch (err) {
+            console.error('Screen capture error:', err);
+            if (ytPopup && !ytPopup.closed) ytPopup.close();
+            ytPopup = null;
+            Module._app_set_download_state(0, 0.0);
+        }
+    }
+
+    /* Any click/key while download_state==1 triggers capture */
+    document.addEventListener('click', function () {
+        if (pendingYtUrl) startYtCapture();
+    });
+    document.addEventListener('keydown', function (e) {
+        if (pendingYtUrl && !e.ctrlKey && !e.metaKey && e.key !== 'Escape')
+            startYtCapture();
+    });
+
+    window.addEventListener('paste', function (e) {
+        var cd = e.clipboardData || window.clipboardData;
+        var text = cd.getData('text/plain') || cd.getData('text');
+        if (text) {
+            var ytId = parseYouTubeUrl(text.trim());
+            if (ytId) {
+                e.preventDefault();
+                downloadAndPlay(text.trim());
+            }
+        }
+    });
 
     /* ── Frame loop ── */
 

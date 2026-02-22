@@ -1,4 +1,5 @@
 #include "contrast.h"
+#include "quickselect.h"
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
@@ -20,40 +21,7 @@ static float cell_luminance(const GlifGridCell *cell) {
            / 255.0f;
 }
 
-/* Quickselect: find k-th smallest element in arr[0..n-1]. Modifies arr.
- * NaN values are moved to the end to prevent infinite loops. */
-static float quickselect(float *arr, int n, int k) {
-    /* Filter NaN to end */
-    int valid = n;
-    for (int i = 0; i < valid; ) {
-        if (arr[i] != arr[i]) { /* NaN */
-            valid--;
-            arr[i] = arr[valid];
-        } else {
-            i++;
-        }
-    }
-    if (valid == 0) return 0.0f;
-    if (k >= valid) k = valid - 1;
-
-    int lo = 0, hi = valid - 1;
-    while (lo < hi) {
-        float pivot = arr[lo + (hi - lo) / 2];
-        int i = lo, j = hi;
-        while (i <= j) {
-            while (arr[i] < pivot) i++;
-            while (arr[j] > pivot) j--;
-            if (i <= j) {
-                float tmp = arr[i]; arr[i] = arr[j]; arr[j] = tmp;
-                i++; j--;
-            }
-        }
-        if (k <= j) hi = j;
-        else if (k >= i) lo = i;
-        else break;
-    }
-    return arr[k];
-}
+#define quickselect glif_quickselect
 
 void glif_contrast_analyze_frame(GlifAdaptiveContrast *ac, const GlifGrid *grid) {
     if (!ac || ac->floor < 0.0f) return;

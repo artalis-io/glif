@@ -25,13 +25,13 @@ int glif_image_load(GlifImage *img, const char *path) {
     return 0;
 }
 
-int glif_image_load_buffer(GlifImage *img, const uint8_t *data, int w, int h, int channels) {
+int glif_image_load_buffer(GlifImage *img, uint8_t *data, int w, int h, int channels) {
     if (!data || w < 1 || h < 1 || (channels != 3 && channels != 4))
         return -1;
     img->width = w;
     img->height = h;
     img->channels = channels;
-    img->pixels = (uint8_t *)data;
+    img->pixels = data;
     img->owns_pixels = 0;
     return 0;
 }

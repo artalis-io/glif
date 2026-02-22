@@ -1,4 +1,6 @@
 #include "temporal.h"
+#include "quickselect.h"
+#include <limits.h>
 #include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
@@ -8,41 +10,7 @@
 #define USE_WASM_SIMD 1
 #endif
 
-/* ── Quickselect (copied from contrast.c — static there) ── */
-
-/* NaN values are moved to the end to prevent infinite loops. */
-static float quickselect(float *arr, int n, int k) {
-    /* Filter NaN to end */
-    int valid = n;
-    for (int i = 0; i < valid; ) {
-        if (arr[i] != arr[i]) { /* NaN */
-            valid--;
-            arr[i] = arr[valid];
-        } else {
-            i++;
-        }
-    }
-    if (valid == 0) return 0.0f;
-    if (k >= valid) k = valid - 1;
-
-    int lo = 0, hi = valid - 1;
-    while (lo < hi) {
-        float pivot = arr[lo + (hi - lo) / 2];
-        int i = lo, j = hi;
-        while (i <= j) {
-            while (arr[i] < pivot) i++;
-            while (arr[j] > pivot) j--;
-            if (i <= j) {
-                float tmp = arr[i]; arr[i] = arr[j]; arr[j] = tmp;
-                i++; j--;
-            }
-        }
-        if (k <= j) hi = j;
-        else if (k >= i) lo = i;
-        else break;
-    }
-    return arr[k];
-}
+#define quickselect glif_quickselect
 
 /* ── A. GlifNormSmoother ── */
 
@@ -54,7 +22,7 @@ void glif_norm_smoother_init(GlifNormSmoother *ns) {
 
 void glif_norm_smoother_apply(GlifNormSmoother *ns, GlifLightnessMap *lm, float alpha) {
     size_t n = (size_t)lm->width * (size_t)lm->height;
-    if (n < 2) return;
+    if (n < 2 || n > (size_t)INT_MAX) return;
 
     /* Compute frame percentiles via quickselect on a scratch copy */
     if (n > SIZE_MAX / sizeof(float)) return;

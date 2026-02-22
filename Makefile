@@ -151,7 +151,7 @@ WASM_EXPORTS = '_app_init','_app_resize','_app_set_dpr','_app_frame','_app_mouse
                '_app_export_grid','_app_get_font_ptr','_app_get_font_len', \
                '_app_upload_video_frame','_app_toggle_compare', \
                '_app_set_content_mode','_app_set_media_state','_app_toggle_hdr', \
-               '_malloc','_free'
+               '_app_toggle_help','_app_set_download_state','_app_clear_content','_malloc','_free'
 
 wasm: $(WASM_UI_SRC)
 	@mkdir -p web
@@ -161,7 +161,7 @@ wasm: $(WASM_UI_SRC)
 	  -s MODULARIZE=1 -s EXPORT_NAME='createGlifModule' \
 	  -s "EXPORTED_FUNCTIONS=[$(WASM_EXPORTS)]" \
 	  -s "EXPORTED_RUNTIME_METHODS=['ccall','cwrap','HEAPU8','HEAP8']" \
-	  -s NO_FILESYSTEM=1 --no-entry \
+	  -s NO_FILESYSTEM=1 -s SINGLE_FILE=1 --no-entry \
 	  -o $(WASM_UI_OUT) $(WASM_UI_SRC) -lm
 
 # WASM build for Chrome extension (no UI framework, just pipeline + WebGL)
