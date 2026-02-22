@@ -96,6 +96,7 @@ A monospace TTF font is required via `-f`. The font's glyph shapes directly affe
 | `--audio-pcm <path>` | Path to raw PCM file (s16le, mono, 44100 Hz) | — |
 | `--audio-rate <hz>` | Output sample rate (2000–48000) | 8000 |
 | `--audio-depth <bits>` | Output bit depth (4 or 8) | 8 |
+| `--keep-audio <path>` | Embed original audio file (Opus/OGG/AAC) in .glif | — |
 
 ## Video in terminal
 
@@ -178,6 +179,13 @@ ffmpeg -i video.mp4 -f rawvideo -pix_fmt rgb24 -s 854x358 - 2>/dev/null | \
 
 # Extra crushed (4kHz 4-bit — maximum retro)
   ... --audio --audio-pcm /tmp/audio.pcm --audio-rate 4000 --audio-depth 4
+
+# Original audio passthrough (Opus/AAC — full quality)
+ffmpeg -i video.mp4 -vn -c:a libopus audio.opus -y
+ffmpeg -i video.mp4 -f rawvideo -pix_fmt rgb24 -s 854x358 - 2>/dev/null | \
+  ./glif --video 854 358 -f fonts/GeistPixel-Square.ttf -w 4 -h 8 \
+    --output-glif output.glif --compress --dark --fps 30 \
+    --keep-audio audio.opus
 ```
 
 **Web player (`web/player.html`):**
@@ -186,9 +194,10 @@ Open `web/player.html` in a browser to play `.glif` files. Features:
 - Drag-and-drop or click to open `.glif` files
 - Play/pause, seek, and speed controls (0.25x–4x)
 - Crushed PCM audio playback (toggle with A key or speaker button)
+- Original audio passthrough when available (toggle with Q key or HQ button)
 - HDR contrast enhancement toggle (shader-based tone mapping)
 - Fullscreen support
-- Keyboard shortcuts: Space (play/pause), F (fullscreen), H (HDR), A (audio), arrow keys (seek/speed)
+- Keyboard shortcuts: Space (play/pause), F (fullscreen), H (HDR), A (audio), Q (original audio), arrow keys (seek/speed)
 - Auto-loads `mk421.glif` if present in the same directory
 
 ```bash
@@ -201,11 +210,12 @@ cd web && python3 -m http.server 8000      # serve locally
 Bundle a `.glif` file into a single HTML file — no server, no external dependencies:
 
 ```bash
-./scripts/glif-embed.sh video.glif                # → video.html
-./scripts/glif-embed.sh video.glif -o embed.html   # custom output name
+./scripts/glif-embed.sh video.glif                       # → video.html
+./scripts/glif-embed.sh video.glif -o embed.html          # custom output name
+./scripts/glif-embed.sh video.glif --video original.mp4   # embed with compare overlay
 ```
 
-The output HTML inlines the WASM binary, JS player, and `.glif` data (base64-encoded) into a single file. Opens directly in any browser with auto-play, HDR toggle, and audio toggle (if the `.glif` contains audio).
+The output HTML inlines the WASM binary, JS player, and `.glif` data (base64-encoded) into a single file. Opens directly in any browser with auto-play, HDR toggle, and audio toggle (if the `.glif` contains audio). The `--video` flag embeds the original video for a side-by-side compare overlay (toggle with V key).
 
 **Programmatic API (`web/glif-player.js`):**
 
@@ -329,16 +339,21 @@ python -m examples.render ../../images/raccoon.jpg ../../fonts/GeistMono-Regular
 python -m examples.pipeline ../../images/raccoon.jpg ../../fonts/GeistMono-Regular.ttf
 ```
 
-## Web demo
+## Web suite
 
-The C core compiles to WebAssembly via Emscripten. The web UI uses Nuklear for widgets, Clay for layout, and a WebGL font-atlas shader for GPU-accelerated rendering.
+The C core compiles to WebAssembly via Emscripten. All tools run entirely client-side — no server processing.
+
+| Tool | URL | Description |
+|------|-----|-------------|
+| **Demo** | [`index.html`](https://glif.artalis.io) | Drag-drop images/video/webcam, live ASCII rendering |
+| **Player** | [`player.html`](https://glif.artalis.io/player.html) | Play .glif files with audio, HDR, fullscreen |
+| **Transcoder** | [`transcode.html`](https://glif.artalis.io/transcode.html) | Create .glif from video in-browser |
+| **Compare** | [`compare.html`](https://glif.artalis.io/compare.html) | Side-by-side original vs ASCII via ffmpeg-wasm |
 
 ```bash
-make wasm
-cd web && python3 -m http.server 8000
+make wasm && make wasm-player && make wasm-encode   # build all WASM targets
+cd web && python3 -m http.server 8000                # serve locally
 ```
-
-Supports drag-and-drop images, video/GIF playback, and live webcam. All processing runs client-side. HiDPI/Retina displays are fully supported with DPR-aware canvas sizing and font atlas rendering.
 
 **[Try it live at glif.artalis.io](https://glif.artalis.io)**
 
@@ -360,35 +375,11 @@ src/
   vec6.h            Header-only 6D/10D vector math
   main.c            CLI entry point
 
-  platform/wasm/
-    vp_render.h      Shared WebGL font-atlas renderer (header-only)
-    ui.c             WASM app: init, frame loop, rendering pipeline
-    ext.c            Chrome extension WASM entry point (no UI, frame-driven)
-    player.c         .glif player WASM entry point (decode + WebGL render)
-    ui_layout.c/h    Responsive layout (desktop/tablet/mobile breakpoints)
-    nk_webgl.c/h     Nuklear WebGL rendering backend
-    nk_impl.c        Nuklear implementation defines
-    clay_impl.c      Clay implementation defines
+  platform/wasm/       WASM entry points (demo, player, extension, encoder)
+  platform/linux/      v4l2loopback output
 
-  platform/linux/
-    v4l2_output.c/h  Direct v4l2loopback output
-
-extension/              Chrome extension (Manifest V3)
-  manifest.json         Extension manifest
-  background.js         Service worker — script injection
-  content.js            Content script — popup/renderer relay
-  webcam-proxy.js       Main-world script at document_start — getUserMedia proxy
-  content-webcam-early.js  Content script at document_start for webcam
-  renderer.js           Main-world script — video overlay lifecycle
-  webcam.js             Main-world script — webcam WASM pipeline + handler
-  popup.html/js/css     Extension popup UI
-  wasm/                 WASM build output (glif-ext.js + .wasm)
-  test/                 Puppeteer smoke tests
-
-web/                  Web frontend and player
-  player.html           .glif player with drag-and-drop, controls, fullscreen
-  glif-player.js        ES module .glif player with playback controls
-  glif-player-wasm.js   WASM player module (built by make wasm-player)
+extension/             Chrome extension (Manifest V3)
+web/                   Web suite (demo, player, transcoder, compare)
 
 vendor/               Vendored single-header libraries (stb, Nuklear, Clay, utest.h)
 tests/                Unit tests (185 tests across 12 test files)
@@ -449,6 +440,21 @@ npm run test:ext  # Chrome extension smoke tests (requires npm install)
 C tests cover all pipeline stages: vector math, sampling, image loading, grid computation, contrast enhancement, character matching, output formats (including lossy preprocessing round-trips), temporal smoothing, deflate compression codecs, .glif round-trip encoding/decoding, and crushed PCM audio encoding/decoding. Uses [Sheredom's utest.h](https://github.com/sheredom/utest.h) framework.
 
 Extension tests use Puppeteer to launch Chrome with the extension loaded, navigate to a test page with a synthetic video, and verify the full overlay lifecycle: injection, overlay creation, WebGL context, params/hi-res updates, disable/re-enable, SPA navigation (`pushState`), and `replaceState` no-op.
+
+## Tools
+
+Standalone utilities for working with `.glif` files:
+
+| Tool | Description |
+|------|-------------|
+| `glif_verify` | Validate .glif file integrity, dump frame stats |
+| `glif_transcode` | Re-encode .glif files with current compression |
+
+```bash
+make tools/glif_verify tools/glif_transcode
+./tools/glif_verify input.glif
+./tools/glif_transcode input.glif output.glif
+```
 
 ## Attribution
 

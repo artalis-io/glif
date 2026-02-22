@@ -1,6 +1,7 @@
 /* Re-encode a .glif file with v3 compression. */
 #include "glif.h"
 #include "output.h"
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

@@ -122,6 +122,12 @@ test: $(LIB_OBJ) $(TESTS)
 tools/bench: tools/bench.c $(LIB_OBJ)
 	$(CC) $(CFLAGS) -o $@ tools/bench.c $(LIB_OBJ) $(LDFLAGS)
 
+tools/glif_verify: tools/glif_verify.c $(LIB_OBJ)
+	$(CC) $(CFLAGS) -o $@ tools/glif_verify.c $(LIB_OBJ) $(LDFLAGS)
+
+tools/glif_transcode: tools/glif_transcode.c $(LIB_OBJ)
+	$(CC) $(CFLAGS) -o $@ tools/glif_transcode.c $(LIB_OBJ) $(LDFLAGS)
+
 debug: clean
 	$(CC) $(DEBUG_CFLAGS) -o $(BIN) $(SRC) $(DEBUG_LDFLAGS)
 
@@ -201,7 +207,8 @@ WASM_PLAYER_SRC = src/glif.c src/compress.c src/blip.c vendor/miniz.c src/platfo
 
 WASM_PLAYER_EXPORTS = '_player_init','_player_load','_player_decode_frame', \
                       '_player_render','_player_resize','_player_free', \
-                      '_player_set_hdr', \
+                      '_player_set_hdr','_player_set_compare', \
+                      '_player_bind_video_tex','_player_upload_video_frame', \
                       '_player_get_frames','_player_get_fps', \
                       '_player_get_cols','_player_get_rows', \
                       '_player_get_cell_w','_player_get_cell_h', \
@@ -223,10 +230,34 @@ wasm-player: $(WASM_PLAYER_SRC)
 	  -s NO_FILESYSTEM=1 --no-entry \
 	  -o web/glif-player-wasm.js $(WASM_PLAYER_SRC) -lm
 
+# WASM encoder for in-browser .glif encoding (full pipeline + writer)
+WASM_ENCODE_SRC = $(CORE_SRC) src/output.c src/compress.c src/glif.c src/blip.c \
+                  vendor/miniz.c src/platform/wasm/encode.c
+
+WASM_ENCODE_EXPORTS = '_encoder_init','_encoder_frame','_encoder_audio_samples', \
+                      '_encoder_keep_original_audio','_encoder_finish', \
+                      '_encoder_get_output_ptr','_encoder_get_output_len', \
+                      '_malloc','_free'
+
+wasm-encode: $(WASM_ENCODE_SRC)
+	@mkdir -p web
+	emcc -std=gnu11 -O2 -Wall -Wextra -Ivendor -Isrc \
+	  -Isrc/platform/wasm \
+	  -s WASM=1 -s ALLOW_MEMORY_GROWTH=1 \
+	  -s MODULARIZE=1 -s EXPORT_NAME='createGlifEncoder' \
+	  -s "EXPORTED_FUNCTIONS=[$(WASM_ENCODE_EXPORTS)]" \
+	  -s "EXPORTED_RUNTIME_METHODS=['HEAPU8','HEAP16']" \
+	  -s FORCE_FILESYSTEM=1 \
+	  -o web/glif-encoder-wasm.js $(WASM_ENCODE_SRC) -lm
+
+# Download ffmpeg-wasm to web/vendor/ffmpeg/
+fetch-ffmpeg:
+	@bash scripts/fetch-ffmpeg.sh
+
 clean:
 	rm -f $(OBJ) $(BIN) $(TESTS)
 	rm -f src/*.pic.o src/platform/linux/*.o src/platform/linux/*.pic.o src/platform/wasm/*.o
 	rm -f vendor/*.o vendor/*.pic.o
 	rm -f libglif.so libglif.dylib
 
-.PHONY: all clean test debug wasm wasm-ext wasm-player shared
+.PHONY: all clean test debug wasm wasm-ext wasm-player wasm-encode fetch-ffmpeg shared

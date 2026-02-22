@@ -45,4 +45,18 @@ bindings/python/.pytest_cache/
 # WASM build output
 web/glif.js
 web/glif.wasm
+web/glif-encoder-wasm.js
+web/glif-encoder-wasm.wasm
 extension/wasm/
+
+# Vendored ffmpeg-wasm (fetched via scripts/fetch-ffmpeg.sh)
+web/vendor/ffmpeg/
+
+# Output files
+*.svg
+
+# Demo / generated artifacts
+*.mp4
+*.glif
+hk421*.html
+mk421*.html

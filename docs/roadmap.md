@@ -2,354 +2,71 @@
 
 ## Completed
 
-### Video Mode (CLI) ✅
-
-Pipe raw frames from ffmpeg — keeps glif dependency-free:
-
-```bash
-ffmpeg -i movie.mp4 -f rawvideo -pix_fmt rgb24 -s 640x480 - | \
-  ./glif --video 640 480 -f fonts/SFNSMono.ttf -c --dark --fps 30
-```
-
-### Diff-Based Rendering ✅
-
-`FrameDiff` renderer only emits ANSI escape codes for changed cells. Uses byte-cost estimation to adaptively choose between diff path and full redraw:
-
-- **Diff cost**: `changed × cell_cost + jumps × 9 + 4`
-- **Full cost**: `3 + total × cell_cost + rows × 5`
-
-Picks whichever is smaller. First frame always renders all cells (prev buffer is zeroed). Subsequent identical frames emit zero bytes.
-
-### Re-encoding to Video via ffmpeg ✅
-
-`--pipe-ppm` and `--pipe-raw` write frames to stdout for ffmpeg to consume. Convenience script `scripts/glif-transcode.sh` handles the full pipeline with presets (hi/dark/lo).
-
-### `.glif` Binary Format ✅
-
-Compact per-frame capture for offline storage and replay. `--output-glif <path>` in video mode.
-
-```
-Header (24 bytes, little-endian):
-  Offset  Size  Field
-  0       4     magic:    "GLIF"
-  4       1     version:  uint8    (1)
-  5       1     flags:    uint8    (bit 0: dark_mode, bit 1: compressed, bit 2: audio)
-  6       2     cols:     uint16
-  8       2     rows:     uint16
-  10      2     cell_w:   uint16
-  12      2     cell_h:   uint16
-  14      4     fps:      float32
-  18      4     frames:   uint32   (written on finish)
-  22      2     reserved: uint16   (zero)
-
-Uncompressed: per frame = cols × rows × 4 bytes [ch, r, g, b]
-Compressed:   per frame = 5-byte envelope [type(u8), size(u32 LE)] + payload
-```
-
-### WASM + Web Frontend ✅
-
-C core compiles to WebAssembly via Emscripten. Web UI built with Nuklear (widgets) + Clay (layout), rendered via WebGL with a font-atlas shader. HiDPI/Retina support with DPR-aware canvas and font rendering.
-
-### Temporal Stabilization ✅
-
-Four independent EMA smoothers reduce flicker in video/webcam:
-- **NormSmoother** — smoothed normalization percentiles
-- **ShapeSmoother** — temporal EMA on Vec6/Vec10 shape vectors
-- **ContrastSmoother** — smoothed adaptive contrast stats
-- **MatchSmoother** — character hysteresis (prevents switching on marginal distance differences)
-
-### Virtual Webcam ✅
-
-`--v4l2` for direct Linux v4l2loopback output, `--pipe-raw` for cross-platform piping through ffmpeg to OBS. Convenience script `scripts/glif-webcam.sh`.
-
-### Adaptive Contrast ✅
-
-Per-frame percentile analysis with configurable noise floor and ceiling. Reduces crunch in dark scenes, increases it in bright ones.
-
-### Chrome Extension — Video Overlay ✅
-
-Real-time ASCII overlay on any web video via a Chrome Manifest V3 extension. The WASM pipeline (`ext.c`) is injected into the page's main world by the background service worker using `chrome.scripting.executeScript`.
-
-- **Overlay lifecycle** — Canvas positioned over `<video>`, frame loop via `requestVideoFrameCallback`, WebGL font-atlas rendering
-- **Persistence** — Enabled state saved to `chrome.storage.local`, auto-restores on new tabs via `host_permissions`
-- **SPA navigation** — Monkey-patched `pushState`/`replaceState` detect URL changes, destroy and re-create overlays (ignores same-URL state updates like YouTube playback time)
-- **Deferred video detection** — `MutationObserver` on `document.body` catches `<video>` elements added after page load (30s timeout)
-- **Event handshake** — `glif-ready` event eliminates the race condition between WASM load and param delivery (replaces `setTimeout`)
-- **Multi-instance safe** — Canvas ID set temporarily during `ext_init`, removed after WebGL context creation
-
-### Chrome Extension — Webcam Interception ✅
-
-Override `navigator.mediaDevices.getUserMedia` to process webcam frames through the WASM pipeline, returning an ASCII art `MediaStream` via `canvas.captureStream(30)`. Works with Zoom Web, Microsoft Teams, and Google Meet.
-
-- **Timing** — `webcam-proxy.js` runs as a `world: "MAIN"` content script at `document_start`, installing a transparent `getUserMedia` proxy before any page JS executes. This ensures interception works even when apps cache the `getUserMedia` reference during module initialization (Google Meet, Teams).
-- **Audio passthrough** — Audio tracks from the real stream are spliced into the processed stream
-- **Cleanup** — `glif-webcam-stop` clears the proxy handler and stops all processing
-
-### Extension Test Suite ✅
-
-Puppeteer-based smoke tests (`npm run test:ext`) that load the extension in a real Chrome instance with a synthetic video (canvas `captureStream`). Verifies: script injection, overlay creation/removal, WebGL context, params, hi-res, disable/re-enable, SPA `pushState` navigation, and `replaceState` no-op.
-
-### `.glif` Compression ✅
-
-Deflate-based frame compression for the `.glif` binary format. Enabled with `--compress` flag (requires `--output-glif`). Sets `GLIF_FLAG_COMPRESSED` (0x02) in the header flags. Without `--compress`, frames are stored as raw `[ch, r, g, b]` cells.
-
-**Per-frame envelope** (5 bytes): `[frame_type(u8), payload_size(u32 LE)]`
-
-Frame types (even = keyframe, odd = delta/P-frame):
-| Type | Encoding |
-|------|----------|
-| `0x00` | **Deflate** — Deinterleave `[ch,r,g,b]` into 4 planes, single deflate stream |
-| `0x01` | **Delta+Deflate** — XOR with previous frame, then deflate |
-| `0x02` | **Filtered+Deflate** — PNG-style adaptive row filters (None/Sub/Up/Avg/Paeth) per plane, then deflate |
-| `0x03` | **Delta+Filtered+Deflate** — XOR with prev, then filtered deflate |
-| `0x04` | **Palette+Deflate** — Build RGB palette (≤256 colors), encode as char+index pairs, deflate |
-| `0x06` | **Planar+Deflate** — Deflate each of the 4 channel planes independently |
-| `0x07` | **Delta+Planar+Deflate** — XOR with prev, then per-plane deflate |
-
-The encoder tries all applicable codecs per frame and picks the smallest. Delta variants are skipped for the first frame (no previous reference). On scene changes, delta costs spike and non-delta codecs naturally win — those frames serve as keyframes.
-
-### Lossy Preprocessing ✅
-
-Two encoder-side preprocessing steps that push compression from ~2x to ~5x on typical video content. Both are enabled by default when `--compress` is active — no format changes, decoder untouched.
-
-**Color quantization** (`--quant <bits>`, default 6 with `--compress`):
-- Drops N LSBs per RGB channel: `value &= 0xFF << (8 - bits)`
-- Creates more repeated byte values, deflate compresses dramatically better
-- Imperceptible for ASCII art — the visual difference between `rgb(100,150,200)` and `rgb(100,148,200)` is invisible at cell granularity
-
-**Temporal thresholding** (`--threshold <n>`, default 4 with `--compress`):
-- Snaps cells whose per-channel RGB diff is ≤ threshold to previous frame values
-- Only snaps when the character is identical — character changes reflect meaningful shape transitions
-- Reduces "changed" cells from ~79% to ~40%, massively improving delta codecs
-- Comparison is against the previous frame's final (quantized+thresholded) values, so it's apples-to-apples
-
-**Results on hk421.mp4 (213×44 grid, 4633 frames, 30fps):**
-| Configuration | Size | Ratio |
-|--------------|------|-------|
-| Raw (uncompressed) | ~172 MB | 1.0x |
-| Deflate only | 122.5 MB | ~1.4x |
-| Deflate + quant 6 + threshold 4 | 32.2 MB | ~5.3x |
-
-Override with `--quant 8 --threshold 0` to disable lossy preprocessing while keeping deflate compression.
-
-### `.glif` Decoder (GlifReader) ✅
-
-Memory-buffer-based decoder for the `.glif` binary format. Reads raw and compressed files without `FILE*` — WASM-compatible. Depends only on `compress.c` and vendored miniz.
-
-- **Sequential fast-path** — When decoding frame N after frame N-1, no walk-back needed; delta frames decode directly against the previous frame buffer
-- **Random access** — For arbitrary seeks, finds the nearest preceding non-delta keyframe and decodes forward through the target frame
-- **Frame index** — Built on `glif_reader_open`: uncompressed uses fixed offsets, compressed walks 5-byte envelopes sequentially
-- **Round-trip verified** — Unit tests write with `GlifWriter`, read with `GlifReader`, and verify byte-exact match for all frame types
-
-### .glif Player (WASM) ✅
-
-Web-based player for the `.glif` binary capture format. Standalone WASM module with minimal deps (no pipeline code — just `glif.c`, `compress.c`, and `player.c`).
-
-**C side (`src/platform/wasm/player.c`):**
-- `player_init` — WebGL context + font atlas setup
-- `player_load` — parse `.glif` buffer via `GlifReader`, rebuild atlas with file's cell dimensions
-- `player_decode_frame` / `player_render` — decode and render via shared WebGL renderer
-- Header accessors: frames, fps, cols, rows, cell_w, cell_h, flags
-
-**JS side (`web/glif-player.js`):**
-- ES module `GlifPlayer` class with `mount()`, `loadFile()`, `play()`, `pause()`, `seek()`, `setSpeed()`, `destroy()`
-- `requestAnimationFrame`-based playback with accumulator-driven frame stepping
-- Configurable speed (0.1x–10x), looping, and callbacks (`onload`, `onframe`, `onend`)
-
-**Build:** `make wasm-player` produces `web/glif-player-wasm.js` + `.wasm`.
-
-### .glif Player UI ✅
-
-Full-featured web player (`web/player.html`) for `.glif` files with a dark modern design:
-
-- **File loading** — Drag-and-drop or click to open `.glif` files via file picker
-- **Playback controls** — Play/pause, click-to-seek progress bar, speed selector (0.25x–4x)
-- **Fullscreen** — Fullscreen API with responsive canvas sizing
-- **HDR enhancement** — Toggle shader-based tone mapping (H key or sun icon button)
-- **Keyboard shortcuts** — Space (play/pause), F (fullscreen), H (HDR), left/right arrows (seek ±5s), up/down arrows (speed)
-- **Auto-load** — Fetches `mk421.glif` if present, or accepts `window.__GLIF_EMBED_DATA` for embed mode
-- **Info bar** — File metadata: grid size, cell size, fps, frame count, duration
-- **DPR-aware** — Proper HiDPI/Retina canvas sizing using `devicePixelRatio`
-
-### Self-Contained HTML Embed ✅
-
-Bundle a `.glif` file + WASM player into a single self-contained HTML file that opens directly in any browser — no server, no external dependencies.
-
-```bash
-./scripts/glif-embed.sh video.glif                # → video.html
-./scripts/glif-embed.sh video.glif -o embed.html   # custom output name
-```
-
-**How it works:**
-- Base64-encodes the `.wasm` binary and `.glif` data directly (no outer gzip — `.glif` frames are already deflate-compressed internally)
-- Inlines the Emscripten JS loader and player logic
-- Passes `wasmBinary` to the Emscripten factory to avoid external fetches
-- Auto-plays on load with full player controls (play/pause, seek, speed, fullscreen)
-- Same dark modern UI as `web/player.html` including HDR toggle
-
-### Shared WebGL Font-Atlas Renderer ✅
-
-Extracted the duplicated WebGL shader code from `ext.c` and `ui.c` into a shared header-only module (`src/platform/wasm/vp_render.h`). All functions `static inline` since each WASM target compiles separately.
-
-- `VpRenderState` struct holds all GL state (program, textures, quad buffer, atlas dimensions)
-- `vp_state_init` — create shader program + quad + data textures
-- `vp_build_font_atlas` — rasterize 95-char atlas (16x6 grid) from TTF font data
-- `vp_render_raw` — upload char/color buffers and draw (used by player)
-- `vp_upload` / `vp_draw` — split upload/draw for callers needing custom viewport/scissor (used by ui.c with Clay bounds)
-
-### Crushed PCM Audio ✅
-
-Retro lo-fi audio embedded in `.glif` files. The original audio is downsampled and quantized to 8-bit unsigned PCM at a low sample rate (default 8kHz), then deflate-compressed and appended after the video frames as a BLIP v2 section. Sounds like telephone-quality retro audio — preserves speech and music while fitting the aesthetic.
-
-**BLIP v2 section format:**
-
-```
-BLIP header (16 bytes, little-endian):
-  Offset  Size  Field
-  0       4     magic:       "BLIP"
-  4       1     version:     uint8 (2)
-  5       1     bit_depth:   uint8 (4 or 8)
-  6       2     sample_rate: uint16 (e.g. 8000)
-  8       4     num_samples: uint32
-  12      4     data_size:   uint32 (compressed size)
-
-Followed by deflate-compressed unsigned PCM data.
-4-bit mode: two samples per byte (high nibble first), then deflate.
-```
-
-**Encoder (`src/blip.c`):**
-- Linear-interpolation resampling from source rate (e.g. 44100) to destination rate (e.g. 8000)
-- Stereo-to-mono downmix
-- Signed 16-bit → unsigned 8-bit (or 4-bit) quantization
-- Incremental feeding: PCM is fed per-video-frame, output accumulates in a growable buffer
-
-**Decoder (`src/glif.c`):**
-- Decompresses BLIP v2 data with `mz_uncompress`
-- Unpacks 4-bit nibbles to individual bytes if needed
-- Backwards compatible: old decoders never see the BLIP section (it follows video frames, and they stop after reading `header.frames` frames)
-- Legacy BLIP v1 sections are detected and skipped gracefully
-
-**Web playback:**
-- Crushed PCM is read from WASM memory (`HEAPU8`) via exported pointer + length
-- Converted to float32 `AudioBuffer` at the original sample rate
-- Played via `AudioBufferSourceNode` synchronized to video position
-- Speed changes update `playbackRate` on the source node
-- Toggle with A key or speaker button (muted by default)
-
-**CLI flags:**
-- `--audio` — enable crushed PCM encoding (requires `--output-glif`)
-- `--audio-pcm <path>` — path to raw PCM input (s16le, mono, 44100 Hz)
-- `--audio-rate <hz>` — output sample rate (default: 8000)
-- `--audio-depth <bits>` — output bit depth, 4 or 8 (default: 8)
-
-**File size overhead:** negligible — 2.5 minutes of 8kHz 8-bit audio compresses to ~1MB with deflate.
-
-### HDR Contrast Enhancement ✅
-
-Shader-based tone mapping and contrast enhancement for all WebGL playback. Controlled by a single `u_hdrIntensity` uniform (0.0 = bypass, 1.0 = full effect). Works on every existing `.glif` file — no format or encoder changes needed.
-
-**Processing chain (fragment shader):**
-1. **Gamma lift** — `pow(color, vec3(gamma))` brightens midtones without clipping highlights. Gamma interpolated from 1.0 (off) to 0.8 (full intensity).
-2. **S-curve contrast** — `smoothstep` sigmoid that darkens shadows and brightens highlights, blended at 50% intensity.
-3. **Saturation boost** — Luminance-based desaturation mix at 1.0 + 0.3×intensity, making ASCII art colors pop against the black background.
-
-**API:**
-- C: `player_set_hdr(float)` / `ext_set_hdr(float)` — exported WASM functions
-- JS: `GlifPlayer.setHDR(intensity)` — clamps 0–1, applies immediately
-- UI: Sun icon toggle button in player and embed control bars, `H` keyboard shortcut (toggles between 0.0 and 0.7)
+### Core Pipeline
+- Shape-based ASCII rendering (6D Vec6 matching)
+- Directional + global + adaptive contrast
+- Temporal stabilization (4 EMA smoothers)
+- OpenMP + SIMD parallelization
+
+### Output Formats
+- Plain ASCII, ANSI truecolor, PPM image, raw RGB24 pipe
+- Diff-based terminal rendering (changed cells only)
+- Dark mode (black background + colored glyphs)
+
+### .glif Format
+- Binary container with 7 deflate-based compression codecs
+- Lossy preprocessing (color quantization + temporal thresholding)
+- GlifReader with sequential fast-path and random-access seeking
+- Crushed PCM audio (BLIP v2: downsample + quantize + deflate)
+- Original audio passthrough (Opus/AAC in ORIG section)
+
+### Web / WASM
+- Full rendering pipeline in browser (Nuklear + Clay + WebGL)
+- .glif player with audio, HDR, fullscreen, keyboard shortcuts
+- Self-contained HTML embed (glif-embed.sh)
+- Browser-based video transcoder (transcode.html)
+- GPU-native video compare overlay (embed + standalone)
+- ES module APIs: GlifPlayer, GlifEncoder
+
+### Platform
+- Chrome extension (video overlay + webcam interception)
+- Virtual webcam (v4l2loopback + pipe-raw)
+- Node.js and Python language bindings
+
+### Video Pipeline
+- CLI video mode (ffmpeg pipe → terminal/PPM/raw/.glif)
+- Convenience scripts (transcode, webcam, embed)
+- HDR shader-based contrast enhancement
 
 ---
 
 ## Planned
 
-### ~~Half-Block Rendering~~ — Won't implement
-
-Glif's core identity is **shape-based character matching** — representing images through actual ASCII glyphs selected by 6D shape vectors. Half-block rendering (`▀▄█` with fg/bg colors) trades away character selection entirely for color resolution, producing output that is no longer ASCII art in any meaningful sense. This fundamentally contradicts the project's philosophy. If you want pixel-accurate color blocks, use an image viewer.
-
-### Original Audio Passthrough in .glif
-
-Embed the original audio track (Opus/AAC) alongside crushed PCM in `.glif` files via the ORIG section. The format already supports this — the ORIG section header and reader are implemented. Needs: CLI `--keep-audio` flag to extract the original audio bitstream and append it, and a player UI toggle to switch between crushed retro and original audio.
-
 ### Background Color Matching
 
 Use ANSI background color (`\033[48;2;...m`) for each cell's average color while keeping the glyph as foreground. This is the single biggest visual quality upgrade available — gives both color accuracy and edge detail. Combined with shape-based glyph matching, cells get full-color backgrounds with contour-aware character overlays.
-
-**Approach:**
-- Compute average color for the cell region
-- Set background to average color, foreground to contrasting color (white or black based on luminance)
 
 **Flag:** `--bg-color` or enabled by default in `--color` mode.
 
 ### SVG Output
 
-Vector export for web embedding and infinite scaling.
-
-**Approach:**
-- One `<text>` or `<rect>`+`<text>` element per cell
-- Monospace font specified via CSS `font-family`
-- Dark mode: colored text on black rect; light mode: white text on colored rect
-- Minimal SVG — no embedded fonts, just character references
+Vector export for web embedding and infinite scaling. One `<text>` element per cell, monospace font specified via CSS `font-family`. Minimal SVG — no embedded fonts, just character references.
 
 **Flag:** `-o output.svg` (detect by extension) or `--svg`.
 
-### Web UI Export
+### 256/16-Color ANSI Fallback
 
-Download button in the web UI to save the current render as PNG or SVG.
+Support older terminals and SSH sessions where truecolor isn't available. Map RGB to nearest xterm-256 or standard 16-color ANSI palette entry. Auto-detect via `$COLORTERM` environment variable.
 
-**Approach:**
-- PNG: read WebGL framebuffer pixels via `gl.readPixels()`, encode with canvas `toBlob()`
-- SVG: generate from the grid data (same as CLI SVG output)
-- Trigger browser download via `URL.createObjectURL()`
+**Flag:** `--color=256`, `--color=16`, or auto-detected.
 
-### 256-Color and 16-Color ANSI Fallback
+---
 
-Support older terminals and SSH sessions where truecolor isn't available.
+## Non-goals
 
-**Approach:**
-- `--color=256`: map RGB to nearest xterm-256 palette entry
-- `--color=16`: map to standard 16 ANSI colors
-- Auto-detect via `$COLORTERM` environment variable (truecolor if `truecolor` or `24bit`, else check `$TERM` for 256-color support)
-
-### Font Comparison View
-
-Side-by-side rendering with different fonts in the web UI.
-
-**Approach:**
-- Split viewport into 2-4 panels, each with its own `CharDatabase`
-- Drag-and-drop font files onto individual panels
-- Shared image/video source, independent font rendering
-- Useful for choosing the best font for a given use case
-
-### Config Presets
-
-Save and load named parameter presets.
-
-**Approach:**
-- Simple key=value text files in `~/.config/glif/` or project-local `.glifrc`
-- `--preset <name>` loads a preset; `--save-preset <name>` saves current flags
-- Ship default presets: `hires`, `retro`, `dark`, `webcam`
-
-### Streaming WebSocket Mode
-
-Pipe terminal-rendered ASCII over a WebSocket for remote viewing.
-
-**Approach:**
-- `--ws <port>` starts a WebSocket server
-- Streams ANSI escape sequences or structured JSON grid data
-- Browser client connects and renders in a `<pre>` or canvas
-- Useful for remote monitoring, sharing renders without screen sharing
-
-### SIXEL Output
-
-For terminals that support SIXEL graphics (kitty, WezTerm, mlterm), render pixel-perfect glyph output inline.
-
-**Approach:**
-- Detect SIXEL support via `$TERM` or device attributes query
-- Render the same PPM pixel buffer used by `--pipe-ppm`
-- Encode as SIXEL escape sequence and write to stdout
-- Gives crisp rendered output without leaving the terminal
-
-**Flag:** `--sixel` or auto-detected.
+- **Half-block rendering** — `▀▄█` with fg/bg colors trades away character selection entirely for color resolution. The output is no longer ASCII art in any meaningful sense, which contradicts glif's core identity of shape-based character matching.
+- **SIXEL output** — Too niche; terminal support is limited.
+- **WebSocket streaming** — Speculative; no concrete use case that pipe + netcat doesn't solve.
 
 ---
 
