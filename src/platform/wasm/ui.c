@@ -899,22 +899,7 @@ void app_frame(void) {
         vp_render(&app.grid, layout.viewport);
     }
 
-    /* Compare divider (accent-blue vertical line) */
-    if (app.compare_on && app.has_result && app.content_w > 0) {
-        float div_x = app.content_x + app.vp.split_pos * app.content_w;
-        float dpr = app.dpr;
-        int px_w = (int)(3.0f * dpr);
-        int px_x = (int)(div_x * dpr) - px_w / 2;
-        int px_y = (int)((float)app.canvas_h -
-                         (app.content_y + app.content_h) * dpr);
-        int px_h = (int)(app.content_h * dpr);
-
-        glEnable(GL_SCISSOR_TEST);
-        glScissor(px_x, px_y, px_w, px_h);
-        glClearColor(74.0f / 255.0f, 158.0f / 255.0f, 255.0f / 255.0f, 1.0f);
-        glClear(GL_COLOR_BUFFER_BIT);
-        glDisable(GL_SCISSOR_TEST);
-    }
+    /* Compare divider is now drawn in the fragment shader (vp_render.h) */
 
     /* Compare labels */
     if (app.compare_on && app.has_result && app.content_w > 0) {
