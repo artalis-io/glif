@@ -271,6 +271,22 @@ int player_has_orig_audio(void) {
 }
 
 EMSCRIPTEN_KEEPALIVE
+int player_get_orig_audio_ptr(void) {
+    if (!player.loaded) return 0;
+    size_t len = 0;
+    const uint8_t *data = glif_reader_orig_audio(&player.reader, &len);
+    return (int)(uintptr_t)data;
+}
+
+EMSCRIPTEN_KEEPALIVE
+int player_get_orig_audio_len(void) {
+    if (!player.loaded) return 0;
+    size_t len = 0;
+    glif_reader_orig_audio(&player.reader, &len);
+    return (int)len;
+}
+
+EMSCRIPTEN_KEEPALIVE
 void player_free(void) {
     if (player.loaded) {
         glif_reader_close(&player.reader);

@@ -209,6 +209,7 @@ WASM_PLAYER_EXPORTS = '_player_init','_player_load','_player_decode_frame', \
                       '_player_has_audio','_player_get_audio_pcm_ptr', \
                       '_player_get_audio_pcm_len','_player_get_audio_bit_depth', \
                       '_player_get_audio_sample_rate','_player_has_orig_audio', \
+                      '_player_get_orig_audio_ptr','_player_get_orig_audio_len', \
                       '_malloc','_free'
 
 wasm-player: $(WASM_PLAYER_SRC)

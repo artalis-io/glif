@@ -33,11 +33,16 @@ export class GlifPlayer {
         this._audioCtx = null;
         this._audioEnabled = false;
         this._audioMuted = false;
-        this._audioBuffer = null;    // decoded AudioBuffer
+        this._audioBuffer = null;    // decoded AudioBuffer (crushed)
         this._audioSource = null;    // current AudioBufferSourceNode
         this._audioGain = null;
         this._audioStartTime = 0;    // audioCtx.currentTime when source started
         this._audioStartOffset = 0;  // offset in seconds when source started
+
+        // Original audio (ORIG section)
+        this._origAudioEnabled = false;
+        this._origAudioBuffer = null;  // decoded AudioBuffer (original)
+        this._usingOrigAudio = false;
 
         // Callbacks
         this.onload = null;
@@ -55,6 +60,8 @@ export class GlifPlayer {
     get currentFrame() { return this._currentFrame; }
     get isPlaying() { return this._playing; }
     get hasAudio() { return this._audioEnabled; }
+    get hasOrigAudio() { return this._origAudioEnabled; }
+    get usingOrigAudio() { return this._usingOrigAudio; }
 
     /**
      * Initialize WASM module and WebGL context.
@@ -120,6 +127,9 @@ export class GlifPlayer {
 
         // Check for audio
         this._audioEnabled = !!this._module._player_has_audio();
+        this._origAudioEnabled = !!this._module._player_has_orig_audio();
+        this._origAudioBuffer = null;
+        this._usingOrigAudio = false;
 
         // Decode and render first frame
         this._currentFrame = 0;
@@ -129,6 +139,14 @@ export class GlifPlayer {
         // Build AudioBuffer from crushed PCM
         if (this._audioEnabled) {
             this._buildAudioBuffer();
+        }
+
+        // Build original audio buffer and default to it
+        if (this._origAudioEnabled) {
+            await this._buildOrigAudioBuffer();
+            if (this._origAudioBuffer) {
+                this._usingOrigAudio = true;
+            }
         }
 
         if (this.onload) this.onload();
@@ -271,9 +289,56 @@ export class GlifPlayer {
         }
     }
 
+    /** @private — Build AudioBuffer from original audio (ORIG section) in WASM memory */
+    async _buildOrigAudioBuffer() {
+        try {
+            if (!this._audioCtx) {
+                this._audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            }
+            if (!this._audioGain) {
+                this._audioGain = this._audioCtx.createGain();
+                this._audioGain.gain.value = this._audioMuted ? 0 : 1;
+                this._audioGain.connect(this._audioCtx.destination);
+            }
+
+            const origPtr = this._module._player_get_orig_audio_ptr();
+            const origLen = this._module._player_get_orig_audio_len();
+
+            if (!origPtr || origLen <= 0) {
+                this._origAudioEnabled = false;
+                return;
+            }
+
+            // Copy from WASM memory and decode (handles Opus/OGG natively)
+            const origData = new Uint8Array(origLen);
+            origData.set(this._module.HEAPU8.subarray(origPtr, origPtr + origLen));
+            this._origAudioBuffer = await this._audioCtx.decodeAudioData(origData.buffer);
+        } catch (e) {
+            this._origAudioEnabled = false;
+            this._origAudioBuffer = null;
+        }
+    }
+
+    /**
+     * Switch between crushed and original audio source.
+     * @param {'crushed'|'original'} mode
+     */
+    setAudioSource(mode) {
+        const useOrig = (mode === 'original');
+        if (useOrig && !this._origAudioBuffer) return;
+        this._usingOrigAudio = useOrig;
+        if (this._playing) {
+            this._stopAudio();
+            this._startAudio();
+        }
+    }
+
     /** @private — Start audio playback from current video position */
     _startAudio() {
-        if (!this._audioEnabled || !this._audioCtx || !this._audioBuffer || this._audioMuted) return;
+        if (!this._audioCtx || this._audioMuted) return;
+
+        const buf = this._usingOrigAudio ? this._origAudioBuffer : this._audioBuffer;
+        if (!buf) return;
 
         if (this._audioCtx.state === 'suspended') {
             this._audioCtx.resume();
@@ -282,10 +347,10 @@ export class GlifPlayer {
         this._stopAudio();
 
         const offset = this._currentFrame / this._fps;
-        if (offset >= this._audioBuffer.duration) return;
+        if (offset >= buf.duration) return;
 
         this._audioSource = this._audioCtx.createBufferSource();
-        this._audioSource.buffer = this._audioBuffer;
+        this._audioSource.buffer = buf;
         this._audioSource.playbackRate.value = this._speed;
         this._audioSource.loop = this._loop;
         this._audioSource.connect(this._audioGain);

@@ -223,6 +223,10 @@ canvas { display: block; max-width: 100%; max-height: 100%; object-fit: contain;
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>
     </button>
 
+    <button class="btn" id="hqBtn" title="Original Audio (Q)" style="display:none">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><text x="3" y="17" font-size="14" font-weight="bold" fill="currentColor" stroke="none">HQ</text></svg>
+    </button>
+
     <button class="btn" id="hdrBtn" title="HDR Enhancement (H)">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
     </button>
@@ -278,6 +282,7 @@ cat >> "$OUTPUT" << 'EMBED_EOF'
     var speedSel = document.getElementById('speed');
     var hdrBtn = document.getElementById('hdrBtn');
     var audioBtn = document.getElementById('audioBtn');
+    var hqBtn = document.getElementById('hqBtn');
     var fullscreenBtn = document.getElementById('fullscreenBtn');
     var playerWrap = document.getElementById('playerWrap');
     var canvasArea = document.getElementById('canvasArea');
@@ -497,6 +502,78 @@ cat >> "$OUTPUT" << 'EMBED_EOF'
 
         buildAudioBuffer();
 
+        // Original audio (ORIG section)
+        var hasOrigAudio = false;
+        var origAudioBuffer = null;
+        var usingOrigAudio = false;
+        try { hasOrigAudio = !!module._player_has_orig_audio(); } catch(e) {}
+
+        if (hasOrigAudio) {
+            hqBtn.style.display = '';
+        }
+
+        async function buildOrigAudioBuffer() {
+            if (!hasOrigAudio) return;
+            try {
+                if (!audioCtx) {
+                    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                    audioGainNode = audioCtx.createGain();
+                    audioGainNode.gain.value = audioMuted ? 0 : 1;
+                    audioGainNode.connect(audioCtx.destination);
+                }
+                var origPtr = module._player_get_orig_audio_ptr();
+                var origLen = module._player_get_orig_audio_len();
+                if (!origPtr || origLen <= 0) { hasOrigAudio = false; return; }
+                var origData = new Uint8Array(origLen);
+                origData.set(module.HEAPU8.subarray(origPtr, origPtr + origLen));
+                origAudioBuffer = await audioCtx.decodeAudioData(origData.buffer);
+            } catch(e) {
+                console.warn('Failed to decode original audio:', e);
+                hasOrigAudio = false;
+                hqBtn.style.display = 'none';
+            }
+        }
+
+        function setAudioSource(useOrig) {
+            usingOrigAudio = useOrig;
+            hqBtn.classList.toggle('active', useOrig);
+            if (playing) { stopAudio(); startAudioFromBuffer(); }
+        }
+
+        var _origStartAudio = startAudio;
+        startAudio = function startAudioFromBuffer() {
+            if (!hasAudio && !hasOrigAudio) return;
+            if (audioMuted || !audioCtx) return;
+            if (audioCtx.state === 'suspended') audioCtx.resume();
+            stopAudio();
+            var buf = usingOrigAudio ? origAudioBuffer : audioBuffer;
+            if (!buf) return;
+            var offset = currentFrame / fps;
+            if (offset >= buf.duration) return;
+            audioSource = audioCtx.createBufferSource();
+            audioSource.buffer = buf;
+            audioSource.playbackRate.value = speed;
+            audioSource.loop = true;
+            audioSource.connect(audioGainNode);
+            audioSource.start(0, offset);
+        };
+
+        function toggleHQ() {
+            if (!hasOrigAudio) return;
+            setAudioSource(!usingOrigAudio);
+        }
+
+        // If orig audio available, decode and default to it
+        if (hasOrigAudio) {
+            buildOrigAudioBuffer().then(function() {
+                if (origAudioBuffer) {
+                    setAudioSource(true);
+                }
+            });
+        }
+
+        hqBtn.addEventListener('click', toggleHQ);
+
         function toggleFullscreen() {
             if (document.fullscreenElement) {
                 document.exitFullscreen();
@@ -560,6 +637,9 @@ cat >> "$OUTPUT" << 'EMBED_EOF'
                     break;
                 case 'a': case 'A':
                     toggleAudio();
+                    break;
+                case 'q': case 'Q':
+                    toggleHQ();
                     break;
                 case 'ArrowLeft':
                     seek(Math.max(0, currentFrame - Math.round(fps * 5)));

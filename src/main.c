@@ -43,7 +43,7 @@ typedef struct {
     int threshold;     /* temporal snap threshold (0=off) */
     GlifAdaptiveContrast adaptive; /* adaptive contrast params */
     int audio;             /* enable crushed PCM audio encoding */
-    int keep_audio;        /* embed original audio as Opus */
+    const char *keep_audio_path; /* path to original audio file (Opus/OGG/AAC) */
     int audio_rate;        /* output sample rate for crushed PCM (default: 8000) */
     int audio_depth;       /* output bit depth (4 or 8, default: 8) */
     const char *audio_pcm_path; /* path to raw PCM file (s16le, mono, 44100) */
@@ -78,7 +78,7 @@ static void usage(const char *prog) {
         "  --quant <bits>           RGB bits to keep (4-8, default 6 with --compress, 8=off)\n"
         "  --threshold <n>          Temporal snap threshold (0-255, default 4 with --compress)\n"
         "  --audio                  Enable crushed PCM audio (requires --output-glif)\n"
-        "  --keep-audio             Embed original audio as Opus (requires --audio)\n"
+        "  --keep-audio <path>      Embed original audio file (Opus/OGG/AAC) in .glif\n"
         "  --audio-rate <hz>        Output sample rate (default: 8000)\n"
         "  --audio-depth <bits>     Output bit depth, 4 or 8 (default: 8)\n"
         "  --audio-pcm <path>       Path to raw PCM file (s16le, mono, 44100)\n"
@@ -112,7 +112,7 @@ static int parse_args(Config *cfg, int argc, char **argv) {
     cfg->adaptive.floor = -1.0f;  /* disabled by default */
     cfg->adaptive.ceil = 80.0f / 255.0f;
     cfg->audio = 0;
-    cfg->keep_audio = 0;
+    cfg->keep_audio_path = NULL;
     cfg->audio_rate = 8000;
     cfg->audio_depth = 8;
     cfg->audio_pcm_path = NULL;
@@ -230,7 +230,8 @@ static int parse_args(Config *cfg, int argc, char **argv) {
         } else if (strcmp(argv[i], "--audio") == 0) {
             cfg->audio = 1;
         } else if (strcmp(argv[i], "--keep-audio") == 0) {
-            cfg->keep_audio = 1;
+            if (++i >= argc) { fprintf(stderr, "error: --keep-audio requires path\n"); return -1; }
+            cfg->keep_audio_path = argv[i];
         } else if (strcmp(argv[i], "--audio-rate") == 0) {
             if (++i >= argc) { fprintf(stderr, "error: --audio-rate requires argument\n"); return -1; }
             char *end;
@@ -324,8 +325,8 @@ static int parse_args(Config *cfg, int argc, char **argv) {
         fprintf(stderr, "error: --audio requires --output-glif\n");
         return -1;
     }
-    if (cfg->keep_audio && !cfg->audio) {
-        fprintf(stderr, "error: --keep-audio requires --audio\n");
+    if (cfg->keep_audio_path && !cfg->glif_path) {
+        fprintf(stderr, "error: --keep-audio requires --output-glif\n");
         return -1;
     }
     if (cfg->audio && !cfg->audio_pcm_path) {
@@ -735,6 +736,31 @@ static int run_video(Config *cfg) {
     if (audio_file) fclose(audio_file);
     free(audio_buf);
     if (gw.file) {
+        /* Embed original audio file if requested */
+        if (cfg->keep_audio_path) {
+            FILE *orig_f = fopen(cfg->keep_audio_path, "rb");
+            if (!orig_f) {
+                fprintf(stderr, "error: cannot open original audio '%s'\n",
+                        cfg->keep_audio_path);
+            } else {
+                fseek(orig_f, 0, SEEK_END);
+                long orig_len = ftell(orig_f);
+                fseek(orig_f, 0, SEEK_SET);
+                if (orig_len > 0) {
+                    uint8_t *orig_data = malloc((size_t)orig_len);
+                    if (orig_data) {
+                        if (fread(orig_data, 1, (size_t)orig_len, orig_f) == (size_t)orig_len) {
+                            glif_writer_keep_original_audio(&gw, orig_data, (size_t)orig_len);
+                            fprintf(stderr, "Original audio: %s (%ld bytes)\n",
+                                    cfg->keep_audio_path, orig_len);
+                        }
+                        free(orig_data);
+                    }
+                }
+                fclose(orig_f);
+            }
+        }
+
         /* Capture audio stats before finish() frees the blip encoder */
         uint32_t audio_sample_count = 0;
         if (gw.blip) audio_sample_count = blip_encoder_samples(gw.blip);
