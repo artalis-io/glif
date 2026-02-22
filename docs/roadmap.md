@@ -266,6 +266,20 @@ Shader-based tone mapping and contrast enhancement for all WebGL playback. Contr
 
 Glif's core identity is **shape-based character matching** — representing images through actual ASCII glyphs selected by 6D shape vectors. Half-block rendering (`▀▄█` with fg/bg colors) trades away character selection entirely for color resolution, producing output that is no longer ASCII art in any meaningful sense. This fundamentally contradicts the project's philosophy. If you want pixel-accurate color blocks, use an image viewer.
 
+### Original Audio Passthrough in .glif
+
+Embed the original audio track (Opus/AAC) alongside crushed PCM in `.glif` files via the ORIG section. The format already supports this — the ORIG section header and reader are implemented. Needs: CLI `--keep-audio` flag to extract the original audio bitstream and append it, and a player UI toggle to switch between crushed retro and original audio.
+
+### Background Color Matching
+
+Use ANSI background color (`\033[48;2;...m`) for each cell's average color while keeping the glyph as foreground. This is the single biggest visual quality upgrade available — gives both color accuracy and edge detail. Combined with shape-based glyph matching, cells get full-color backgrounds with contour-aware character overlays.
+
+**Approach:**
+- Compute average color for the cell region
+- Set background to average color, foreground to contrasting color (white or black based on luminance)
+
+**Flag:** `--bg-color` or enabled by default in `--color` mode.
+
 ### SVG Output
 
 Vector export for web embedding and infinite scaling.
@@ -295,17 +309,6 @@ Support older terminals and SSH sessions where truecolor isn't available.
 - `--color=256`: map RGB to nearest xterm-256 palette entry
 - `--color=16`: map to standard 16 ANSI colors
 - Auto-detect via `$COLORTERM` environment variable (truecolor if `truecolor` or `24bit`, else check `$TERM` for 256-color support)
-
-### Background Color Matching
-
-Use ANSI background color (`\033[48;2;...m`) for each cell's average color while keeping the glyph as foreground.
-
-**Approach:**
-- Compute average color for the cell region
-- Set background to average color, foreground to contrasting color (white or black based on luminance)
-- Combined with shape-based glyph matching, this gives both color accuracy and edge detail
-
-**Flag:** `--bg-color` or enabled by default in `--color` mode.
 
 ### Font Comparison View
 
