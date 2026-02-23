@@ -10,6 +10,14 @@ int main(int argc, char **argv) {
         return 1;
     }
 
+#if defined(__OpenBSD__) || defined(__linux__)
+    #include "sandbox.h"
+    glif_unveil(argv[1], "r");
+    glif_unveil_lock();
+    if (glif_pledge("stdio rpath") != 0)
+        fprintf(stderr, "warning: pledge() failed\n");
+#endif
+
     FILE *f = fopen(argv[1], "rb");
     if (!f) { fprintf(stderr, "Cannot open %s\n", argv[1]); return 1; }
     fseek(f, 0, SEEK_END);

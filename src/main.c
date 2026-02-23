@@ -805,6 +805,31 @@ int main(int argc, char **argv) {
         return 1;
     }
 
+#if defined(__OpenBSD__) || defined(__linux__)
+    #include "sandbox.h"
+    /* Unveil only the paths this invocation needs */
+    if (cfg.font_path)
+        glif_unveil(cfg.font_path, "r");
+    if (cfg.video) {
+        if (cfg.glif_path)
+            glif_unveil(cfg.glif_path, "wc");
+        if (cfg.audio_pcm_path)
+            glif_unveil(cfg.audio_pcm_path, "r");
+        if (cfg.keep_audio_path)
+            glif_unveil(cfg.keep_audio_path, "r");
+        if (cfg.v4l2_device)
+            glif_unveil(cfg.v4l2_device, "rw");
+    } else {
+        if (cfg.input_path)
+            glif_unveil(cfg.input_path, "r");
+        if (cfg.output_path)
+            glif_unveil(cfg.output_path, "wc");
+    }
+    glif_unveil_lock();
+    if (glif_pledge("stdio rpath wpath cpath tty") != 0)
+        fprintf(stderr, "warning: pledge() failed\n");
+#endif
+
     if (cfg.video) {
         return run_video(&cfg);
     } else {

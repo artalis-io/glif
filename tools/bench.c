@@ -36,6 +36,16 @@ int main(int argc, char **argv) {
         return 1;
     }
 
+#if defined(__OpenBSD__) || defined(__linux__)
+    #include "sandbox.h"
+    glif_unveil(argv[1], "r");
+    glif_unveil(argv[2], "r");
+    glif_unveil("/tmp", "rwc");
+    glif_unveil_lock();
+    if (glif_pledge("stdio rpath wpath cpath") != 0)
+        fprintf(stderr, "warning: pledge() failed\n");
+#endif
+
     int cell_w = 10, cell_h = 20;
     float dir_crunch = 2.0f, global_crunch = 2.0f;
     double t0, t1;

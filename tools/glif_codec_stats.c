@@ -3,6 +3,7 @@
 #include "output.h"
 #include "compress.h"
 #include "miniz.h"
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -12,6 +13,14 @@ int main(int argc, char **argv) {
         fprintf(stderr, "Usage: %s <input.glif> [max_frames]\n", argv[0]);
         return 1;
     }
+#if defined(__OpenBSD__) || defined(__linux__)
+    #include "sandbox.h"
+    glif_unveil(argv[1], "r");
+    glif_unveil_lock();
+    if (glif_pledge("stdio rpath") != 0)
+        fprintf(stderr, "warning: pledge() failed\n");
+#endif
+
     int max_analyze = 200;
     if (argc >= 3) {
         char *endptr;

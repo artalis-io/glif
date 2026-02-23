@@ -23,6 +23,27 @@ ifeq ($(UNAME_S),Linux)
   CFLAGS += -D_DEFAULT_SOURCE
 endif
 
+# Pledge/unveil sandboxing (Linux only — OpenBSD has native support)
+PLEDGE_OBJ =
+ifeq ($(UNAME_S),Linux)
+  PLEDGE_SRC = vendor/pledge/libc/calls/pledge.c \
+               vendor/pledge/libc/calls/pledge-linux.c \
+               vendor/pledge/libc/calls/unveil.c \
+               vendor/pledge/libc/calls/parsepromises.c \
+               vendor/pledge/libc/calls/landlock_create_ruleset.c \
+               vendor/pledge/libc/calls/landlock_add_rule.c \
+               vendor/pledge/libc/calls/landlock_restrict_self.c \
+               vendor/pledge/libc/intrin/promises.c \
+               vendor/pledge/libc/calls/islinux.c \
+               vendor/pledge/libc/intrin/pthread_setcancelstate.c \
+               vendor/pledge/libc/str/classifypath.c \
+               vendor/pledge/libc/str/endswith.c \
+               vendor/pledge/libc/str/isabspath.c \
+               vendor/pledge/libc/fmt/joinpaths.c
+  PLEDGE_OBJ = $(PLEDGE_SRC:.c=.o)
+  CFLAGS += -Ivendor/pledge
+endif
+
 # Debug build with sanitizers (no OpenMP — conflicts with ASan)
 DEBUG_CFLAGS = -std=c11 -Wall -Wextra -Wpedantic -Wshadow -Wformat=2 \
                -g -O0 -fsanitize=address,undefined -fno-omit-frame-pointer \
@@ -57,7 +78,7 @@ TESTS = tests/test_vec6 tests/test_sampling tests/test_image \
 
 all: $(BIN)
 
-$(BIN): $(OBJ)
+$(BIN): $(OBJ) $(PLEDGE_OBJ)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
 src/%.o: src/%.c
@@ -65,6 +86,10 @@ src/%.o: src/%.c
 
 vendor/%.o: vendor/%.c
 	$(CC) $(CFLAGS) -Wno-shadow -Wno-format-nonliteral -c -o $@ $<
+
+vendor/pledge/%.o: vendor/pledge/%.c
+	$(CC) $(CFLAGS) -Wno-shadow -Wno-pedantic -Wno-format-nonliteral \
+	  -Wno-unused-parameter -Wno-sign-compare -c -o $@ $<
 
 src/platform/linux/%.o: src/platform/linux/%.c
 	$(CC) $(CFLAGS) -c -o $@ $<
@@ -119,14 +144,20 @@ test: $(LIB_OBJ) $(TESTS)
 	if [ $$fail -eq 0 ]; then echo "=== All tests passed ==="; \
 	else echo "=== Some tests failed ==="; exit 1; fi
 
-tools/bench: tools/bench.c $(LIB_OBJ)
-	$(CC) $(CFLAGS) -o $@ tools/bench.c $(LIB_OBJ) $(LDFLAGS)
+tools/bench: tools/bench.c $(LIB_OBJ) $(PLEDGE_OBJ)
+	$(CC) $(CFLAGS) -o $@ tools/bench.c $(LIB_OBJ) $(PLEDGE_OBJ) $(LDFLAGS)
 
-tools/glif_verify: tools/glif_verify.c $(LIB_OBJ)
-	$(CC) $(CFLAGS) -o $@ tools/glif_verify.c $(LIB_OBJ) $(LDFLAGS)
+tools/glif_verify: tools/glif_verify.c $(LIB_OBJ) $(PLEDGE_OBJ)
+	$(CC) $(CFLAGS) -o $@ tools/glif_verify.c $(LIB_OBJ) $(PLEDGE_OBJ) $(LDFLAGS)
 
-tools/glif_transcode: tools/glif_transcode.c $(LIB_OBJ)
-	$(CC) $(CFLAGS) -o $@ tools/glif_transcode.c $(LIB_OBJ) $(LDFLAGS)
+tools/glif_transcode: tools/glif_transcode.c $(LIB_OBJ) $(PLEDGE_OBJ)
+	$(CC) $(CFLAGS) -o $@ tools/glif_transcode.c $(LIB_OBJ) $(PLEDGE_OBJ) $(LDFLAGS)
+
+tools/glif_codec_stats: tools/glif_codec_stats.c $(LIB_OBJ) $(PLEDGE_OBJ)
+	$(CC) $(CFLAGS) -o $@ tools/glif_codec_stats.c $(LIB_OBJ) $(PLEDGE_OBJ) $(LDFLAGS)
+
+tools/glif_compare: tools/glif_compare.c $(LIB_OBJ) $(PLEDGE_OBJ)
+	$(CC) $(CFLAGS) -o $@ tools/glif_compare.c $(LIB_OBJ) $(PLEDGE_OBJ) $(LDFLAGS)
 
 debug: clean
 	$(CC) $(DEBUG_CFLAGS) -o $(BIN) $(SRC) $(DEBUG_LDFLAGS)
@@ -263,6 +294,7 @@ clean:
 	rm -f $(OBJ) $(BIN) $(TESTS)
 	rm -f src/*.pic.o src/platform/linux/*.o src/platform/linux/*.pic.o src/platform/wasm/*.o
 	rm -f vendor/*.o vendor/*.pic.o
+	rm -f $(PLEDGE_OBJ)
 	rm -f libglif.so libglif.dylib
 
 .PHONY: all clean test debug wasm wasm-ext wasm-player wasm-encode fetch-ffmpeg shared
