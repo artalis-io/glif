@@ -441,6 +441,34 @@ C tests cover all pipeline stages: vector math, sampling, image loading, grid co
 
 Extension tests use Puppeteer to launch Chrome with the extension loaded, navigate to a test page with a synthetic video, and verify the full overlay lifecycle: injection, overlay creation, WebGL context, params/hi-res updates, disable/re-enable, SPA navigation (`pushState`), and `replaceState` no-op.
 
+## Why C
+
+This question comes up, so here's the reasoning.
+
+**The codebase processes untrusted input** (images, fonts, .glif files) through vendored C libraries (stb_image, stb_truetype, miniz). The attack surface is real. We address it with defense-in-depth rather than language-level guarantees:
+
+- `pledge()`/`unveil()` sandboxing on OpenBSD and Linux (seccomp-bpf + Landlock) — every CLI tool locks down syscalls and filesystem visibility after arg parsing, before touching input
+- `-D_FORTIFY_SOURCE=2 -fstack-protector-strong` — compile-time and runtime buffer overflow detection
+- AddressSanitizer + UBSan in debug builds
+- All inputs bounds-checked at system boundaries (`strtol` with full validation, size overflow checks before allocation)
+- LLM-assisted auditing for memory safety, use-after-free, and missing bounds checks
+
+**Why not Rust?** Rust solves memory safety at the type system level, which is genuinely valuable at scale — large teams, deep dependency trees, long-lived codebases with contributor churn. For a small, focused project with vendored deps and one or two authors who understand every line, the tradeoffs don't pay off:
+
+- *FFI kills the safety story.* The core pipeline calls stb_image, stb_truetype, and miniz on every frame. Each call crosses an `unsafe` FFI boundary. You get Rust's complexity without Rust's guarantees where they matter most.
+- *Borrow checker fights the domain.* `GlifReader` holds a buffer and references into it (self-referential). The video pipeline reuses allocated buffers across frames and passes raw pointers between stages. These are natural in C and a restructuring project in Rust.
+- *You solve Rust problems, not domain problems.* Time spent on lifetime annotations, `Arc<Mutex<>>` wrappers, orphan rule workarounds, and `Pin`/`Unpin` incantations is time not spent on sampling geometry, contrast curves, or codec strategies.
+- *Cargo supply chain risk.* A typical Rust CLI pulls 200+ transitive crates from random maintainers. One compromised crate, one typosquat — you're shipping malicious code. This project vendors 3 single-header libraries you can read end to end.
+- *Compile time.* Clean build: ~2 seconds. A comparable Rust project with `image`, `clap`, `rayon`: 30–90 seconds. Fast iteration matters for exploratory work.
+
+**Why not Zig?** Zig gets a lot right — `comptime` over macros, explicit allocators, no hidden control flow, C interop for free. For a *new* project not needing Emscripten or OpenMP, it would be a strong choice. For this project, the ecosystem isn't there yet: no stb replacements, no stable 1.0, and the WASM build relies heavily on Emscripten features (`EXPORTED_FUNCTIONS`, `MODULARIZE`, `SINGLE_FILE`) that Zig's WASM target doesn't support.
+
+**Why not C++?** No. Everything C gives you here but with a language that actively fights simplicity. The real risk isn't technical — it's cultural. C++ doesn't have a culture of restraint. Your `parse_args` is 200 lines of clear `strcmp` chains; in C++ someone would reach for a CLI parsing library or a template-based argument parser. Both worse.
+
+**Why not Go / Java / C#?** Managed languages add runtime weight and GC pauses for problems this project doesn't have. The per-frame pipeline runs in <1ms — Go's GC alone can exceed that. No manual memory layout control, no SIMD, and no WASM story that matches the current Emscripten setup.
+
+**Why not Python?** About 2 frames per century.
+
 ## Tools
 
 Standalone utilities for working with `.glif` files:
@@ -471,6 +499,7 @@ Implements the ASCII rendering technique from [Alex Harri's](https://alexharri.c
 | [Nuklear](https://github.com/Immediate-Mode-UI/Nuklear) | Micha Mettke | MIT / Public domain |
 | [Clay](https://github.com/nicbarker/clay) | Nic Barker | zlib |
 | [utest.h](https://github.com/sheredom/utest.h) | Sheredom | Unlicense |
+| [pledge](https://github.com/jart/pledge) | Justine Tunney | ISC |
 
 ### Fonts
 
