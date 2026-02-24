@@ -17,10 +17,10 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libomp-dev fonts-dejavu-core
 
       - name: Build
-        run: make CFLAGS="-std=c11 -Wall -Wextra -Wpedantic -Wshadow -Wformat=2 -D_FORTIFY_SOURCE=2 -fstack-protector-strong -O2 -Ivendor -Isrc -DGLIF_NO_SANDBOX"
+        run: make CFLAGS="-std=c11 -Wall -Wextra -Wpedantic -Wshadow -Wformat=2 -D_FORTIFY_SOURCE=2 -fstack-protector-strong -O2 -Ivendor -Isrc -D_DEFAULT_SOURCE -DGLIF_NO_SANDBOX"
 
       - name: Test
-        run: make test CFLAGS="-std=c11 -Wall -Wextra -Wpedantic -Wshadow -Wformat=2 -D_FORTIFY_SOURCE=2 -fstack-protector-strong -O2 -Ivendor -Isrc -DGLIF_NO_SANDBOX"
+        run: make test CFLAGS="-std=c11 -Wall -Wextra -Wpedantic -Wshadow -Wformat=2 -D_FORTIFY_SOURCE=2 -fstack-protector-strong -O2 -Ivendor -Isrc -D_DEFAULT_SOURCE -DGLIF_NO_SANDBOX"
         env:
           GLIF_TEST_FONT: /usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf
 
