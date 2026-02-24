@@ -10,6 +10,10 @@ tests/test_*
 # Tools
 tools/bench
 tools/gen_test_images
+tools/glif_codec_stats
+tools/glif_compare
+tools/glif_transcode
+tools/glif_verify
 
 # Test data
 images/
