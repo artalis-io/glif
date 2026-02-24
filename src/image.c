@@ -133,7 +133,7 @@ int glif_lightness_map_create(GlifLightnessMap *lm, const GlifImage *img) {
     lm->height = img->height;
     size_t npix = (size_t)lm->width * (size_t)lm->height;
     if (npix > SIZE_MAX / sizeof(float)) return -1;
-    lm->data = malloc(npix * sizeof(float));
+    lm->data = calloc(npix, sizeof(float));
     if (!lm->data) return -1;
 
     const uint8_t *pixels = img->pixels;

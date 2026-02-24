@@ -522,7 +522,7 @@ static int run_video(Config *cfg) {
         glif_sampling_precompute_free(&pm);
         return 1;
     }
-    lm.data = malloc(npix * sizeof(float));
+    lm.data = calloc(npix, sizeof(float));
     if (!lm.data) {
         glif_grid_free(&grid);
         free(frame_buf);
