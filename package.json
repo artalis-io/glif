@@ -1,9 +1,0 @@
-{
-  "private": true,
-  "scripts": {
-    "test:ext": "node extension/test/smoke.mjs"
-  },
-  "devDependencies": {
-    "puppeteer": "^23.0.0"
-  }
-}
