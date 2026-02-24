@@ -25,7 +25,8 @@ OUTPUT=
 GRID_W=
 GRID_H=
 BLIP_AUDIO=0
-KEEP_AUDIO=0
+KEEP_AUDIO=auto
+KEEP_AUDIO_PATH=
 AUDIO_RATE=50
 GLIF_OUTPUT=
 
@@ -49,6 +50,8 @@ Options:
   --adapt-floor <0-255> Adaptive noise floor (hi: 5, dark: 3)
   --adapt-ceil <0-255>  Adaptive ceiling (hi: 80, dark: 60)
   --no-adaptive         Disable adaptive contrast
+  --keep-audio <path>   Embed original audio file in .glif (default: auto-extract)
+  --no-keep-audio       Don't embed original audio in .glif
   --help                Show this message
 EOF
     exit 0
@@ -65,7 +68,8 @@ while [ $# -gt 0 ]; do
         --crf)       CRF="$2"; shift 2 ;;
         --grid)      GRID_W="$2"; GRID_H="$3"; shift 3 ;;
         --blip)      BLIP_AUDIO=1; shift ;;
-        --keep-audio) KEEP_AUDIO=1; shift ;;
+        --keep-audio) KEEP_AUDIO=yes; KEEP_AUDIO_PATH="$2"; shift 2 ;;
+        --no-keep-audio) KEEP_AUDIO=no; shift ;;
         --audio-rate) AUDIO_RATE="$2"; shift 2 ;;
         --output-glif) GLIF_OUTPUT="$2"; shift 2 ;;
         -d|--dir-crunch)    DIR_CRUNCH="$2"; shift 2 ;;
@@ -207,6 +211,21 @@ if [ "$BLIP_AUDIO" -eq 1 ] && [ -n "$HAS_AUDIO" ]; then
         -f s16le -acodec pcm_s16le -ac 1 -ar 44100 \
         "$TMPDIR/audio.pcm"
     AUDIO_FLAGS="--audio --audio-pcm $TMPDIR/audio.pcm --audio-rate $AUDIO_RATE"
+fi
+
+# Auto-extract original audio as Opus for --keep-audio
+if [ -n "$GLIF_OUTPUT" ] && [ -n "$HAS_AUDIO" ] && [ "$KEEP_AUDIO" != "no" ]; then
+    if [ -n "$KEEP_AUDIO_PATH" ]; then
+        # User provided explicit path
+        AUDIO_FLAGS="$AUDIO_FLAGS --keep-audio $KEEP_AUDIO_PATH"
+    else
+        # Auto-extract as Opus
+        echo "Extracting original audio as Opus..." >&2
+        ffmpeg -v warning -i "$INPUT" \
+            -vn -c:a libopus -b:a 96k \
+            "$TMPDIR/orig_audio.ogg"
+        AUDIO_FLAGS="$AUDIO_FLAGS --keep-audio $TMPDIR/orig_audio.ogg"
+    fi
 fi
 
 # Build .glif output flags if requested

@@ -1,6 +1,7 @@
 /* Re-encode a .glif file with v3 compression. */
 #include "glif.h"
 #include "output.h"
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -10,6 +11,15 @@ int main(int argc, char **argv) {
         fprintf(stderr, "Usage: %s <input.glif> <output.glif> [keyframe_interval]\n", argv[0]);
         return 1;
     }
+#if defined(__OpenBSD__) || defined(__linux__)
+    #include "sandbox.h"
+    glif_unveil(argv[1], "r");
+    glif_unveil(argv[2], "wc");
+    glif_unveil_lock();
+    if (glif_pledge("stdio rpath wpath cpath") != 0)
+        fprintf(stderr, "warning: pledge() failed\n");
+#endif
+
     int kf_interval = 0;
     if (argc >= 4) {
         char *end;

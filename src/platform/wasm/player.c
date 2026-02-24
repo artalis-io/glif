@@ -271,6 +271,49 @@ int player_has_orig_audio(void) {
 }
 
 EMSCRIPTEN_KEEPALIVE
+int player_get_orig_audio_ptr(void) {
+    if (!player.loaded) return 0;
+    size_t len = 0;
+    const uint8_t *data = glif_reader_orig_audio(&player.reader, &len);
+    return (int)(uintptr_t)data;
+}
+
+EMSCRIPTEN_KEEPALIVE
+int player_get_orig_audio_len(void) {
+    if (!player.loaded) return 0;
+    size_t len = 0;
+    glif_reader_orig_audio(&player.reader, &len);
+    return (int)len;
+}
+
+/* ── Compare overlay API ── */
+
+EMSCRIPTEN_KEEPALIVE
+void player_set_compare(int mode, float split_pos) {
+    if (!player.initialized) return;
+    player.vp.compare_mode = mode;
+    if (split_pos < 0.0f) split_pos = 0.0f;
+    if (split_pos > 1.0f) split_pos = 1.0f;
+    player.vp.split_pos = split_pos;
+}
+
+EMSCRIPTEN_KEEPALIVE
+void player_bind_video_tex(void) {
+    if (!player.initialized) return;
+    glActiveTexture(GL_TEXTURE3);
+    glBindTexture(GL_TEXTURE_2D, player.vp.video_tex);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void player_upload_video_frame(const uint8_t *rgba, int w, int h) {
+    if (!player.initialized || !rgba || w <= 0 || h <= 0) return;
+    glActiveTexture(GL_TEXTURE3);
+    glBindTexture(GL_TEXTURE_2D, player.vp.video_tex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0,
+                 GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+}
+
+EMSCRIPTEN_KEEPALIVE
 void player_free(void) {
     if (player.loaded) {
         glif_reader_close(&player.reader);

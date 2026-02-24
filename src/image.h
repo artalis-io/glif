@@ -21,7 +21,7 @@ typedef struct {
 int glif_image_load(GlifImage *img, const char *path);
 
 /* Wrap an existing pixel buffer (no copy). channels must be 3 (RGB) or 4 (RGBA). */
-int glif_image_load_buffer(GlifImage *img, const uint8_t *data, int w, int h, int channels);
+int glif_image_load_buffer(GlifImage *img, uint8_t *data, int w, int h, int channels);
 
 void glif_image_free(GlifImage *img);
 

@@ -26,7 +26,7 @@ ffi.cdef("""
     } GlifLightnessMap;
 
     int glif_image_load(GlifImage *img, const char *path);
-    int glif_image_load_buffer(GlifImage *img, const uint8_t *data, int w, int h, int channels);
+    int glif_image_load_buffer(GlifImage *img, uint8_t *data, int w, int h, int channels);
     void glif_image_free(GlifImage *img);
     int glif_lightness_map_create(GlifLightnessMap *lm, const GlifImage *img);
     int glif_lightness_map_update(GlifLightnessMap *lm, const GlifImage *img);

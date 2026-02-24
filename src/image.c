@@ -6,6 +6,11 @@
 #include <math.h>
 #include <stdatomic.h>
 
+#if defined(__EMSCRIPTEN__) && defined(__wasm_simd128__)
+#include <wasm_simd128.h>
+#define USE_WASM_SIMD 1
+#endif
+
 int glif_image_load(GlifImage *img, const char *path) {
     /* Force 3 channels (RGB) to avoid OOB on grayscale images (H6) */
     int orig_channels;
@@ -20,13 +25,13 @@ int glif_image_load(GlifImage *img, const char *path) {
     return 0;
 }
 
-int glif_image_load_buffer(GlifImage *img, const uint8_t *data, int w, int h, int channels) {
+int glif_image_load_buffer(GlifImage *img, uint8_t *data, int w, int h, int channels) {
     if (!data || w < 1 || h < 1 || (channels != 3 && channels != 4))
         return -1;
     img->width = w;
     img->height = h;
     img->channels = channels;
-    img->pixels = (uint8_t *)data;
+    img->pixels = data;
     img->owns_pixels = 0;
     return 0;
 }
@@ -81,12 +86,43 @@ int glif_lightness_map_update(GlifLightnessMap *lm, const GlifImage *img) {
 #ifdef _OPENMP
     #pragma omp parallel for schedule(static)
 #endif
+#if USE_WASM_SIMD
+    {
+        v128_t wr = wasm_f32x4_splat(0.2126f);
+        v128_t wg = wasm_f32x4_splat(0.7152f);
+        v128_t wb = wasm_f32x4_splat(0.0722f);
+        size_t i = 0, n4 = npixels & ~(size_t)3;
+        for (; i < n4; i += 4) {
+            const uint8_t *p0 = pixels + i * channels;
+            const uint8_t *p1 = p0 + channels;
+            const uint8_t *p2 = p1 + channels;
+            const uint8_t *p3 = p2 + channels;
+            v128_t r = wasm_f32x4_make(srgb_lut[p0[0]], srgb_lut[p1[0]],
+                                       srgb_lut[p2[0]], srgb_lut[p3[0]]);
+            v128_t g = wasm_f32x4_make(srgb_lut[p0[1]], srgb_lut[p1[1]],
+                                       srgb_lut[p2[1]], srgb_lut[p3[1]]);
+            v128_t b = wasm_f32x4_make(srgb_lut[p0[2]], srgb_lut[p1[2]],
+                                       srgb_lut[p2[2]], srgb_lut[p3[2]]);
+            v128_t lum = wasm_f32x4_add(wasm_f32x4_add(wasm_f32x4_mul(r, wr),
+                                                         wasm_f32x4_mul(g, wg)),
+                                         wasm_f32x4_mul(b, wb));
+            wasm_v128_store(dest + i, lum);
+        }
+        for (; i < npixels; i++) {
+            const uint8_t *px = pixels + i * channels;
+            dest[i] = 0.2126f * srgb_lut[px[0]]
+                    + 0.7152f * srgb_lut[px[1]]
+                    + 0.0722f * srgb_lut[px[2]];
+        }
+    }
+#else
     for (size_t i = 0; i < npixels; i++) {
         const uint8_t *px = pixels + i * channels;
         dest[i] = 0.2126f * srgb_lut[px[0]]
                 + 0.7152f * srgb_lut[px[1]]
                 + 0.0722f * srgb_lut[px[2]];
     }
+#endif
     return 0;
 }
 
@@ -97,7 +133,7 @@ int glif_lightness_map_create(GlifLightnessMap *lm, const GlifImage *img) {
     lm->height = img->height;
     size_t npix = (size_t)lm->width * (size_t)lm->height;
     if (npix > SIZE_MAX / sizeof(float)) return -1;
-    lm->data = malloc(npix * sizeof(float));
+    lm->data = calloc(npix, sizeof(float));
     if (!lm->data) return -1;
 
     const uint8_t *pixels = img->pixels;
@@ -107,12 +143,43 @@ int glif_lightness_map_create(GlifLightnessMap *lm, const GlifImage *img) {
 #ifdef _OPENMP
     #pragma omp parallel for schedule(static)
 #endif
+#if USE_WASM_SIMD
+    {
+        v128_t wr = wasm_f32x4_splat(0.2126f);
+        v128_t wg = wasm_f32x4_splat(0.7152f);
+        v128_t wb = wasm_f32x4_splat(0.0722f);
+        size_t i = 0, n4 = npix & ~(size_t)3;
+        for (; i < n4; i += 4) {
+            const uint8_t *p0 = pixels + i * channels;
+            const uint8_t *p1 = p0 + channels;
+            const uint8_t *p2 = p1 + channels;
+            const uint8_t *p3 = p2 + channels;
+            v128_t r = wasm_f32x4_make(srgb_lut[p0[0]], srgb_lut[p1[0]],
+                                       srgb_lut[p2[0]], srgb_lut[p3[0]]);
+            v128_t g = wasm_f32x4_make(srgb_lut[p0[1]], srgb_lut[p1[1]],
+                                       srgb_lut[p2[1]], srgb_lut[p3[1]]);
+            v128_t b = wasm_f32x4_make(srgb_lut[p0[2]], srgb_lut[p1[2]],
+                                       srgb_lut[p2[2]], srgb_lut[p3[2]]);
+            v128_t lum = wasm_f32x4_add(wasm_f32x4_add(wasm_f32x4_mul(r, wr),
+                                                         wasm_f32x4_mul(g, wg)),
+                                         wasm_f32x4_mul(b, wb));
+            wasm_v128_store(dest + i, lum);
+        }
+        for (; i < npix; i++) {
+            const uint8_t *px = pixels + i * channels;
+            dest[i] = 0.2126f * srgb_lut[px[0]]
+                    + 0.7152f * srgb_lut[px[1]]
+                    + 0.0722f * srgb_lut[px[2]];
+        }
+    }
+#else
     for (size_t i = 0; i < npix; i++) {
         const uint8_t *px = pixels + i * channels;
         dest[i] = 0.2126f * srgb_lut[px[0]]
                 + 0.7152f * srgb_lut[px[1]]
                 + 0.0722f * srgb_lut[px[2]];
     }
+#endif
     return 0;
 }
 
@@ -147,12 +214,35 @@ void glif_lightness_map_normalize(GlifLightnessMap *lm) {
 #ifdef _OPENMP
     #pragma omp parallel for schedule(static)
 #endif
+#if USE_WASM_SIMD
+    {
+        v128_t vp5 = wasm_f32x4_splat(p5);
+        v128_t vinv = wasm_f32x4_splat(inv_range);
+        v128_t vzero = wasm_f32x4_splat(0.0f);
+        v128_t vone = wasm_f32x4_splat(1.0f);
+        size_t i = 0, n4 = n & ~(size_t)3;
+        for (; i < n4; i += 4) {
+            v128_t v = wasm_v128_load(lm->data + i);
+            v = wasm_f32x4_mul(wasm_f32x4_sub(v, vp5), vinv);
+            v = wasm_f32x4_max(v, vzero);
+            v = wasm_f32x4_min(v, vone);
+            wasm_v128_store(lm->data + i, v);
+        }
+        for (; i < n; i++) {
+            float v = (lm->data[i] - p5) * inv_range;
+            if (v < 0.0f) v = 0.0f;
+            if (v > 1.0f) v = 1.0f;
+            lm->data[i] = v;
+        }
+    }
+#else
     for (size_t i = 0; i < n; i++) {
         float v = (lm->data[i] - p5) * inv_range;
         if (v < 0.0f) v = 0.0f;
         if (v > 1.0f) v = 1.0f;
         lm->data[i] = v;
     }
+#endif
 }
 
 void glif_lightness_map_free(GlifLightnessMap *lm) {

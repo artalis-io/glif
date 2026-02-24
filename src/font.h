@@ -20,6 +20,7 @@ typedef struct {
     int cell_w;
     int cell_h;
     unsigned char *font_data;  /* raw TTF file data */
+    size_t font_data_len;      /* byte length of font_data */
     int owns_font_data;        /* 1 = file-loaded, 0 = external buffer */
 } GlifCharDatabase;
 

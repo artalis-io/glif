@@ -37,6 +37,16 @@ int main(int argc, char **argv) {
         return 1;
     }
 
+#if defined(__OpenBSD__) || defined(__linux__)
+    #include "sandbox.h"
+    glif_unveil(argv[1], "r");
+    glif_unveil(argv[2], "r");
+    glif_unveil("/tmp", "rwc");
+    glif_unveil_lock();
+    if (glif_pledge("stdio rpath wpath cpath") != 0)
+        fprintf(stderr, "warning: pledge() failed\n");
+#endif
+
     int num_frames = 20;
     if (argc > 3) {
         char *endptr;

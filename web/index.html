@@ -7,11 +7,17 @@
 <style>
 * { margin: 0; }
 html, body { width: 100%; height: 100%; overflow: hidden; background: #1a1a1a; }
-canvas { width: 100vw; height: 100vh; display: block; }
+#appWrap { display: flex; flex-direction: column; width: 100vw; height: 100vh; }
+.canvas-area { flex: 1; min-height: 0; position: relative; }
+canvas { display: block; width: 100%; height: 100%; }
 </style>
 </head>
 <body>
-<canvas id="canvas"></canvas>
+<div id="appWrap">
+  <div class="canvas-area" id="canvasArea">
+    <canvas id="canvas"></canvas>
+  </div>
+</div>
 <script src="glif.js"></script>
 <script src="glif-app.js"></script>
 </body>

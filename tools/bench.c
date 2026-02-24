@@ -36,6 +36,16 @@ int main(int argc, char **argv) {
         return 1;
     }
 
+#if defined(__OpenBSD__) || defined(__linux__)
+    #include "sandbox.h"
+    glif_unveil(argv[1], "r");
+    glif_unveil(argv[2], "r");
+    glif_unveil("/tmp", "rwc");
+    glif_unveil_lock();
+    if (glif_pledge("stdio rpath wpath cpath") != 0)
+        fprintf(stderr, "warning: pledge() failed\n");
+#endif
+
     int cell_w = 10, cell_h = 20;
     float dir_crunch = 2.0f, global_crunch = 2.0f;
     double t0, t1;
@@ -44,7 +54,10 @@ int main(int argc, char **argv) {
 
     t0 = now_ms();
     GlifImage img;
-    glif_image_load(&img, argv[1]);
+    if (glif_image_load(&img, argv[1]) != 0) {
+        fprintf(stderr, "error: failed to load image '%s'\n", argv[1]);
+        return 1;
+    }
     t1 = now_ms();
     printf("glif_image_load:          %6.2f ms\n", t1 - t0);
 
@@ -53,13 +66,22 @@ int main(int argc, char **argv) {
 
     t0 = now_ms();
     GlifCharDatabase db;
-    glif_char_db_create(&db, argv[2], cell_w, cell_h, &sc);
+    if (glif_char_db_create(&db, argv[2], cell_w, cell_h, &sc) != 0) {
+        fprintf(stderr, "error: failed to create char db from '%s'\n", argv[2]);
+        glif_image_free(&img);
+        return 1;
+    }
     t1 = now_ms();
     printf("glif_char_db_create:      %6.2f ms\n", t1 - t0);
 
     /* Precompute once */
     GlifLightnessMap lm;
-    glif_lightness_map_create(&lm, &img);
+    if (glif_lightness_map_create(&lm, &img) != 0) {
+        fprintf(stderr, "error: failed to create lightness map\n");
+        glif_char_db_free(&db);
+        glif_image_free(&img);
+        return 1;
+    }
 
     t0 = now_ms();
     GlifPrecomputedMasks pm;
@@ -135,6 +157,16 @@ int main(int argc, char **argv) {
     uint8_t *dec_buf = malloc(buf_size);
     uint8_t *work_buf = malloc(buf_size);
     uint8_t *zeroed = calloc(buf_size, 1);
+    if (!flat || !enc_buf || !dec_buf || !work_buf || !zeroed) {
+        fprintf(stderr, "error: allocation failed\n");
+        free(flat); free(enc_buf); free(dec_buf); free(work_buf); free(zeroed);
+        glif_grid_free(&grid);
+        glif_lightness_map_free(&lm);
+        glif_sampling_precompute_free(&pm);
+        glif_char_db_free(&db);
+        glif_image_free(&img);
+        return 1;
+    }
 
     int enc_iters = 1000;
     printf("\n=== Encode/decode (%d iterations) ===\n", enc_iters);
@@ -255,6 +287,7 @@ int main(int argc, char **argv) {
             if (f) {
                 fseek(f, 0, SEEK_END);
                 long flen = ftell(f);
+                if (flen <= 0) { fclose(f); goto decode_done; }
                 rewind(f);
                 uint8_t *fbuf = malloc((size_t)flen);
                 if (fbuf && fread(fbuf, 1, (size_t)flen, f) == (size_t)flen) {
@@ -280,6 +313,7 @@ int main(int argc, char **argv) {
             }
             remove(tmp_path);
         }
+    decode_done: ;
     }
 
     free(flat);

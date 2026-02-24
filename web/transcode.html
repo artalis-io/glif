@@ -1,0 +1,465 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Glif Transcoder</title>
+<style>
+:root {
+  --bg: #0a0a0a;
+  --surface: #141414;
+  --border: #2a2a2a;
+  --text: #e0e0e0;
+  --text-dim: #666;
+  --accent: #4a9eff;
+  --accent-hover: #6ab4ff;
+  --danger: #ff4a4a;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { height: 100%; background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; }
+
+.app {
+  max-width: 800px; margin: 0 auto; padding: 32px 24px;
+  display: flex; flex-direction: column; gap: 24px; min-height: 100vh;
+}
+
+h1 { font-size: 24px; font-weight: 600; }
+h1 span { color: var(--accent); }
+
+.drop-zone {
+  border: 2px dashed var(--border); border-radius: 12px;
+  padding: 48px 24px; text-align: center; cursor: pointer;
+  transition: border-color 0.2s, background 0.2s;
+}
+.drop-zone:hover, .drop-zone.dragover {
+  border-color: var(--accent); background: rgba(74, 158, 255, 0.05);
+}
+.drop-zone p { color: var(--text-dim); font-size: 15px; margin-top: 8px; }
+.drop-zone .icon { font-size: 36px; color: var(--text-dim); }
+
+.btn {
+  background: none; border: 1px solid var(--border); color: var(--text);
+  cursor: pointer; padding: 8px 16px; border-radius: 6px;
+  font-size: 14px; transition: background 0.15s, border-color 0.15s;
+  display: inline-flex; align-items: center; gap: 6px;
+}
+.btn:hover { background: rgba(255,255,255,0.06); border-color: #444; }
+.btn:disabled { opacity: 0.4; cursor: default; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #000; font-weight: 500; }
+.btn.primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+.btn.primary:disabled { background: var(--border); border-color: var(--border); color: var(--text-dim); }
+
+.card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 8px; padding: 16px; display: flex; flex-direction: column; gap: 12px;
+}
+.card h3 { font-size: 14px; font-weight: 500; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.5px; }
+
+.info-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 8px;
+}
+.info-item { display: flex; flex-direction: column; gap: 2px; }
+.info-item .label { font-size: 11px; color: var(--text-dim); text-transform: uppercase; }
+.info-item .value { font-size: 14px; font-variant-numeric: tabular-nums; }
+
+.preset-group {
+  display: flex; gap: 8px; flex-wrap: wrap;
+}
+.preset-btn {
+  background: var(--surface); border: 1px solid var(--border); color: var(--text);
+  padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 13px;
+  transition: background 0.15s, border-color 0.15s;
+}
+.preset-btn:hover { border-color: #444; }
+.preset-btn.active { border-color: var(--accent); color: var(--accent); background: rgba(74, 158, 255, 0.08); }
+
+.progress-bar {
+  height: 6px; background: var(--border); border-radius: 3px; overflow: hidden;
+}
+.progress-bar .fill {
+  height: 100%; background: var(--accent); border-radius: 3px;
+  transition: width 0.15s;
+}
+
+.progress-text {
+  display: flex; justify-content: space-between; font-size: 13px; color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.actions { display: flex; gap: 12px; flex-wrap: wrap; }
+
+.hidden { display: none !important; }
+
+.footer {
+  margin-top: auto; padding-top: 16px; text-align: center;
+  font-size: 12px; color: var(--text-dim);
+}
+.footer a { color: var(--text-dim); text-decoration: none; }
+.footer a:hover { color: var(--accent); }
+
+.status { font-size: 14px; color: var(--text-dim); }
+.status.error { color: var(--danger); }
+</style>
+</head>
+<body>
+<div class="app">
+  <h1><span>glif</span> transcoder</h1>
+
+  <div class="drop-zone" id="dropZone">
+    <div class="icon">&#128249;</div>
+    <p>Drop a video file here, or click to browse</p>
+    <p style="font-size: 12px; color: var(--text-dim)">MP4, WebM, AVI, MOV supported</p>
+    <input type="file" id="fileInput" accept="video/*" style="display:none">
+  </div>
+
+  <div class="card hidden" id="probeCard">
+    <h3>Input Video</h3>
+    <div class="info-grid" id="probeInfo"></div>
+  </div>
+
+  <div class="card hidden" id="settingsCard">
+    <h3>Preset</h3>
+    <div class="preset-group" id="presetGroup">
+      <button class="preset-btn active" data-preset="hi">Hi (8x16)</button>
+      <button class="preset-btn" data-preset="lo">Lo (16x32)</button>
+      <button class="preset-btn" data-preset="dark">Dark mode</button>
+    </div>
+    <div class="actions">
+      <button class="btn primary" id="startBtn" disabled>Transcode</button>
+    </div>
+  </div>
+
+  <div class="card hidden" id="progressCard">
+    <h3>Progress</h3>
+    <div class="progress-bar"><div class="fill" id="progressFill" style="width:0%"></div></div>
+    <div class="progress-text">
+      <span id="progressLabel">Initializing...</span>
+      <span id="progressPct">0%</span>
+    </div>
+  </div>
+
+  <div class="card hidden" id="resultCard">
+    <h3>Output</h3>
+    <div class="info-grid" id="resultInfo"></div>
+    <div class="actions">
+      <button class="btn primary" id="downloadBtn">Download .glif</button>
+      <button class="btn" id="previewBtn">Preview</button>
+    </div>
+  </div>
+
+  <div class="hidden" id="previewWrap" style="margin-top: 8px;">
+    <canvas id="glif-player-canvas" width="1280" height="720"
+            style="width:100%; background:#000; border-radius:8px;"></canvas>
+  </div>
+
+  <div class="status hidden" id="statusMsg"></div>
+
+  <div class="footer">
+    <a href="https://github.com/artalis-io/glif" target="_blank">glif</a> &mdash; ASCII art video format
+  </div>
+</div>
+
+<script type="module">
+import { GlifEncoder } from './glif-encoder.js';
+import { GlifPlayer } from './glif-player.js';
+
+const dropZone = document.getElementById('dropZone');
+const fileInput = document.getElementById('fileInput');
+const probeCard = document.getElementById('probeCard');
+const probeInfo = document.getElementById('probeInfo');
+const settingsCard = document.getElementById('settingsCard');
+const presetGroup = document.getElementById('presetGroup');
+const startBtn = document.getElementById('startBtn');
+const progressCard = document.getElementById('progressCard');
+const progressFill = document.getElementById('progressFill');
+const progressLabel = document.getElementById('progressLabel');
+const progressPct = document.getElementById('progressPct');
+const resultCard = document.getElementById('resultCard');
+const resultInfo = document.getElementById('resultInfo');
+const downloadBtn = document.getElementById('downloadBtn');
+const previewBtn = document.getElementById('previewBtn');
+const previewWrap = document.getElementById('previewWrap');
+const statusMsg = document.getElementById('statusMsg');
+
+let videoFile = null;
+let videoMeta = null;
+let glifOutput = null;
+let glifFilename = '';
+let player = null;
+
+// State
+let preset = 'hi';
+let darkMode = true;
+
+function showStatus(msg, isError = false) {
+    statusMsg.textContent = msg;
+    statusMsg.classList.toggle('error', isError);
+    statusMsg.classList.remove('hidden');
+}
+
+function hideStatus() {
+    statusMsg.classList.add('hidden');
+}
+
+function infoItem(label, value) {
+    return `<div class="info-item"><span class="label">${label}</span><span class="value">${value}</span></div>`;
+}
+
+// Drop zone
+dropZone.addEventListener('click', () => fileInput.click());
+dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('dragover'); });
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+dropZone.addEventListener('drop', (e) => {
+    e.preventDefault();
+    dropZone.classList.remove('dragover');
+    if (e.dataTransfer.files.length > 0) handleFile(e.dataTransfer.files[0]);
+});
+fileInput.addEventListener('change', () => {
+    if (fileInput.files.length > 0) handleFile(fileInput.files[0]);
+});
+
+// Preset buttons
+presetGroup.addEventListener('click', (e) => {
+    const btn = e.target.closest('.preset-btn');
+    if (!btn) return;
+    const p = btn.dataset.preset;
+    if (p === 'dark') {
+        darkMode = !darkMode;
+        btn.classList.toggle('active', darkMode);
+    } else {
+        preset = p;
+        presetGroup.querySelectorAll('.preset-btn:not([data-preset="dark"])').forEach(b => {
+            b.classList.toggle('active', b.dataset.preset === preset);
+        });
+    }
+});
+
+// Init dark mode button state
+presetGroup.querySelector('[data-preset="dark"]').classList.toggle('active', darkMode);
+
+async function handleFile(file) {
+    videoFile = file;
+    glifOutput = null;
+    resultCard.classList.add('hidden');
+    progressCard.classList.add('hidden');
+    previewWrap.classList.add('hidden');
+    hideStatus();
+
+    glifFilename = file.name.replace(/\.[^.]+$/, '') + '.glif';
+
+    // Probe using a <video> element
+    const url = URL.createObjectURL(file);
+    const video = document.createElement('video');
+    video.preload = 'metadata';
+    video.muted = true;
+
+    try {
+        await new Promise((resolve, reject) => {
+            video.onloadedmetadata = resolve;
+            video.onerror = () => reject(new Error('Cannot read video file'));
+            video.src = url;
+        });
+
+        videoMeta = {
+            width: video.videoWidth,
+            height: video.videoHeight,
+            duration: video.duration,
+            name: file.name,
+            size: file.size,
+        };
+
+        // Try to estimate FPS (default 30 if not available)
+        videoMeta.fps = 30;
+
+        probeInfo.innerHTML =
+            infoItem('File', videoMeta.name) +
+            infoItem('Resolution', `${videoMeta.width}x${videoMeta.height}`) +
+            infoItem('Duration', `${videoMeta.duration.toFixed(1)}s`) +
+            infoItem('Size', `${(videoMeta.size / 1048576).toFixed(1)} MB`);
+
+        probeCard.classList.remove('hidden');
+        settingsCard.classList.remove('hidden');
+        startBtn.disabled = false;
+
+    } catch (err) {
+        showStatus('Error: ' + err.message, true);
+    } finally {
+        URL.revokeObjectURL(url);
+    }
+}
+
+// Transcode
+startBtn.addEventListener('click', async () => {
+    if (!videoFile || !videoMeta) return;
+
+    startBtn.disabled = true;
+    progressCard.classList.remove('hidden');
+    resultCard.classList.add('hidden');
+    previewWrap.classList.add('hidden');
+    hideStatus();
+
+    try {
+        await transcode();
+    } catch (err) {
+        showStatus('Transcode failed: ' + err.message, true);
+        console.error(err);
+    }
+    startBtn.disabled = false;
+});
+
+async function transcode() {
+    const { width, height, duration, fps } = videoMeta;
+
+    let cellW = 10, cellH = 20;
+    if (preset === 'lo') { cellW = 16; cellH = 32; }
+    if (preset === 'hi') { cellW = 8; cellH = 16; }
+
+    const totalFrames = Math.ceil(duration * fps);
+
+    progressLabel.textContent = 'Extracting frames...';
+    progressFill.style.width = '0%';
+    progressPct.textContent = '0%';
+
+    // Extract frames using OffscreenCanvas + video element
+    const url = URL.createObjectURL(videoFile);
+    const video = document.createElement('video');
+    video.muted = true;
+    video.playsInline = true;
+
+    await new Promise((resolve, reject) => {
+        video.onloadeddata = resolve;
+        video.onerror = () => reject(new Error('Cannot load video'));
+        video.src = url;
+    });
+
+    // Init encoder
+    progressLabel.textContent = 'Initializing encoder...';
+    const encoder = new GlifEncoder();
+    await encoder.mount();
+
+    encoder.init({
+        width, height, cellW, cellH,
+        fps, dark: darkMode, compress: true,
+        audioRate: 0, audioDepth: 0, // No audio in frame-by-frame extract
+    });
+
+    // Canvas for frame extraction
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+
+    // Seek through video frame by frame
+    const frameDur = 1 / fps;
+    let frameIdx = 0;
+    const t0 = performance.now();
+
+    for (let t = 0; t < duration; t += frameDur) {
+        // Seek
+        video.currentTime = t;
+        await new Promise((resolve) => {
+            video.onseeked = resolve;
+        });
+
+        // Draw frame to canvas
+        ctx.drawImage(video, 0, 0, width, height);
+        const imageData = ctx.getImageData(0, 0, width, height);
+
+        // Convert RGBA to RGB24
+        const rgba = imageData.data;
+        const rgb = new Uint8Array(width * height * 3);
+        for (let i = 0, j = 0; i < rgba.length; i += 4, j += 3) {
+            rgb[j]     = rgba[i];
+            rgb[j + 1] = rgba[i + 1];
+            rgb[j + 2] = rgba[i + 2];
+        }
+
+        encoder.encodeFrame(rgb.buffer);
+        frameIdx++;
+
+        // Update progress
+        const pct = Math.round((frameIdx / totalFrames) * 100);
+        progressFill.style.width = pct + '%';
+        progressPct.textContent = pct + '%';
+
+        const elapsed = (performance.now() - t0) / 1000;
+        const eta = frameIdx > 0 ? (elapsed / frameIdx) * (totalFrames - frameIdx) : 0;
+        progressLabel.textContent = `Encoding frame ${frameIdx}/${totalFrames} (ETA ${eta.toFixed(0)}s)`;
+
+        // Yield to UI
+        if (frameIdx % 5 === 0) {
+            await new Promise(r => setTimeout(r, 0));
+        }
+    }
+
+    URL.revokeObjectURL(url);
+
+    progressLabel.textContent = 'Finalizing...';
+    progressFill.style.width = '100%';
+    progressPct.textContent = '100%';
+
+    glifOutput = await encoder.finish();
+
+    const outputSize = glifOutput.byteLength;
+    const cols = Math.floor(width / cellW);
+    const rows = Math.floor(height / cellH);
+
+    resultInfo.innerHTML =
+        infoItem('File', glifFilename) +
+        infoItem('Size', `${(outputSize / 1048576).toFixed(2)} MB`) +
+        infoItem('Grid', `${cols}x${rows}`) +
+        infoItem('Frames', `${frameIdx}`) +
+        infoItem('Duration', `${(frameIdx / fps).toFixed(1)}s`);
+
+    resultCard.classList.remove('hidden');
+    progressCard.classList.add('hidden');
+}
+
+// Download
+downloadBtn.addEventListener('click', () => {
+    if (!glifOutput) return;
+    const blob = new Blob([glifOutput], { type: 'application/octet-stream' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = glifFilename;
+    a.click();
+    URL.revokeObjectURL(url);
+});
+
+// Preview
+previewBtn.addEventListener('click', async () => {
+    if (!glifOutput) return;
+    previewWrap.classList.remove('hidden');
+
+    const canvas = document.getElementById('glif-player-canvas');
+
+    if (!player) {
+        player = new GlifPlayer();
+        await player.mount(canvas);
+    }
+
+    await player.loadFile(glifOutput);
+    player.setHDR(0.7);
+
+    // Size canvas
+    const cols = player.cols;
+    const rows = player.rows;
+    const cellW = player.cellW;
+    const cellH = player.cellH;
+    const aspect = (cols * cellW) / (rows * cellH);
+    const w = canvas.parentElement.clientWidth;
+    const h = w / aspect;
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = Math.round(w * dpr);
+    canvas.height = Math.round(h * dpr);
+    canvas.style.width = Math.round(w) + 'px';
+    canvas.style.height = Math.round(h) + 'px';
+    player.resize(canvas.width, canvas.height);
+
+    player.play();
+});
+</script>
+</body>
+</html>

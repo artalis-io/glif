@@ -126,6 +126,14 @@ input[type=file] { display: none; }
       <option value="4">4x</option>
     </select>
 
+    <button class="btn" id="audioBtn" title="Toggle Audio (A)" style="display:none">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>
+    </button>
+
+    <button class="btn" id="hqBtn" title="Original Audio (Q)" style="display:none">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><text x="3" y="17" font-size="14" font-weight="bold" fill="currentColor" stroke="none">HQ</text></svg>
+    </button>
+
     <button class="btn" id="hdrBtn" title="HDR Enhancement (H)">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
     </button>
@@ -159,6 +167,8 @@ const progressWrap = document.getElementById('progressWrap');
 const progressFill = document.getElementById('progressFill');
 const speedSel = document.getElementById('speed');
 const openBtn = document.getElementById('openBtn');
+const audioBtn = document.getElementById('audioBtn');
+const hqBtn = document.getElementById('hqBtn');
 const hdrBtn = document.getElementById('hdrBtn');
 const fullscreenBtn = document.getElementById('fullscreenBtn');
 const playerWrap = document.getElementById('playerWrap');
@@ -230,6 +240,20 @@ async function loadGlif(buffer, name) {
     player.seek(0);
     updateUI(0);
 
+    // Show audio buttons if available
+    if (player.hasAudio) {
+      audioBtn.style.display = '';
+      audioBtn.classList.add('active');
+    } else {
+      audioBtn.style.display = 'none';
+    }
+    if (player.hasOrigAudio) {
+      hqBtn.style.display = '';
+      hqBtn.classList.toggle('active', player.usingOrigAudio);
+    } else {
+      hqBtn.style.display = 'none';
+    }
+
     const dur = formatTime(player.frames / player.fps);
     infoText.textContent = `${name} — ${player.cols}×${player.rows} · ${player.cellW}×${player.cellH}px · ${player.fps} fps · ${player.frames} frames · ${dur}`;
   } catch (err) {
@@ -279,6 +303,23 @@ function toggleHDR() {
 }
 hdrBtn.addEventListener('click', toggleHDR);
 
+// Audio
+function toggleAudio() {
+  if (!player || !player.hasAudio) return;
+  player.toggleMute();
+  audioBtn.classList.toggle('active');
+}
+audioBtn.addEventListener('click', toggleAudio);
+
+// HQ (original audio)
+function toggleHQ() {
+  if (!player || !player.hasOrigAudio) return;
+  const useOrig = !player.usingOrigAudio;
+  player.setAudioSource(useOrig ? 'original' : 'crushed');
+  hqBtn.classList.toggle('active', player.usingOrigAudio);
+}
+hqBtn.addEventListener('click', toggleHQ);
+
 // File open
 dropOverlay.addEventListener('click', () => filePicker.click());
 openBtn.addEventListener('click', () => filePicker.click());
@@ -326,6 +367,12 @@ document.addEventListener('keydown', (e) => {
       break;
     case 'h': case 'H':
       toggleHDR();
+      break;
+    case 'a': case 'A':
+      toggleAudio();
+      break;
+    case 'q': case 'Q':
+      toggleHQ();
       break;
     case 'ArrowLeft':
       if (player) { player.seek(Math.max(0, player.currentFrame - Math.round(player.fps * 5))); updateUI(player.currentFrame); }

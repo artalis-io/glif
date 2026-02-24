@@ -201,6 +201,8 @@ int glif_output_ppm(const GlifGrid *grid, const GlifCharDatabase *db,
         if (!render_bmps) return -1;
     }
 
+    if (img_w > 0 && img_h > SIZE_MAX / img_w) return -1;
+    if (img_w * img_h > SIZE_MAX / 3) return -1;
     uint8_t *pixels = calloc(img_w * img_h * 3, 1);
     if (!pixels) {
         if (render_bmps) {
@@ -277,6 +279,137 @@ int glif_output_ppm(const GlifGrid *grid, const GlifCharDatabase *db,
     return 0;
 }
 
+/* ---- SVG output ---- */
+
+/* Base64 encoding table + helper */
+static const char b64_table[] =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+static char *base64_encode(const unsigned char *data, size_t len, size_t *out_len) {
+    size_t olen = 4 * ((len + 2) / 3);
+    char *out = malloc(olen + 1);
+    if (!out) return NULL;
+    size_t j = 0;
+    for (size_t i = 0; i < len; ) {
+        uint32_t a = i < len ? data[i++] : 0;
+        uint32_t b = i < len ? data[i++] : 0;
+        uint32_t c = i < len ? data[i++] : 0;
+        uint32_t triple = (a << 16) | (b << 8) | c;
+        out[j++] = b64_table[(triple >> 18) & 0x3F];
+        out[j++] = b64_table[(triple >> 12) & 0x3F];
+        out[j++] = (i > len + 1) ? '=' : b64_table[(triple >> 6) & 0x3F];
+        out[j++] = (i > len) ? '=' : b64_table[triple & 0x3F];
+    }
+    out[j] = '\0';
+    if (out_len) *out_len = j;
+    return out;
+}
+
+/* Write an XML-escaped character to file. Returns chars written. */
+static void svg_write_char(FILE *f, char ch) {
+    switch (ch) {
+    case '&':  fputs("&amp;", f); break;
+    case '<':  fputs("&lt;", f); break;
+    case '>':  fputs("&gt;", f); break;
+    case '"':  fputs("&quot;", f); break;
+    case '\'': fputs("&apos;", f); break;
+    default:   fputc(ch, f); break;
+    }
+}
+
+int glif_output_svg(const GlifGrid *grid, const GlifCharDatabase *db,
+                    const char *path, int dark_mode) {
+    if (!grid || !grid->cells || !db || !path) return -1;
+    if (!db->font_data || db->font_data_len == 0) {
+        fprintf(stderr, "error: SVG output requires font data\n");
+        return -1;
+    }
+
+    FILE *f = fopen(path, "w");
+    if (!f) {
+        fprintf(stderr, "error: cannot open '%s' for writing\n", path);
+        return -1;
+    }
+
+    int cw = grid->cell_w;
+    int ch = grid->cell_h;
+    int svg_w = grid->cols * cw;
+    int svg_h = grid->rows * ch;
+
+    /* Base64-encode font data */
+    size_t b64_len = 0;
+    char *font_b64 = base64_encode(db->font_data, db->font_data_len, &b64_len);
+    if (!font_b64) {
+        fclose(f);
+        return -1;
+    }
+
+    /* SVG header */
+    fprintf(f, "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 %d %d\">\n",
+            svg_w, svg_h);
+
+    /* Style with embedded font */
+    fprintf(f, "<style>\n");
+    fprintf(f, "@font-face { font-family: 'GlifFont'; src: url(data:font/ttf;base64,%s); }\n",
+            font_b64);
+    free(font_b64);
+    fprintf(f, "text { font-family: 'GlifFont'; font-size: %dpx; "
+            "dominant-baseline: text-before-edge; }\n", ch);
+    fprintf(f, "</style>\n");
+
+    /* Background rect */
+    if (dark_mode) {
+        fprintf(f, "<rect width=\"100%%\" height=\"100%%\" fill=\"#000\"/>\n");
+    } else {
+        fprintf(f, "<rect width=\"100%%\" height=\"100%%\" fill=\"#fff\"/>\n");
+    }
+
+    /* Emit text elements row by row */
+    for (int r = 0; r < grid->rows; r++) {
+        int y = r * ch;
+
+        if (dark_mode) {
+            /* Dark mode: colored text on black background, skip spaces */
+            int c = 0;
+            while (c < grid->cols) {
+                const GlifGridCell *cell = &grid->cells[r * grid->cols + c];
+                if (cell->ch == ' ') { c++; continue; }
+
+                /* Start a run of same-color characters */
+                uint8_t cr = cell->r, cg = cell->g, cb = cell->b;
+                int start_c = c;
+                fprintf(f, "<text x=\"%d\" y=\"%d\" fill=\"rgb(%d,%d,%d)\">",
+                        start_c * cw, y, cr, cg, cb);
+                while (c < grid->cols) {
+                    const GlifGridCell *cur = &grid->cells[r * grid->cols + c];
+                    if (cur->ch == ' ' || cur->r != cr || cur->g != cg || cur->b != cb)
+                        break;
+                    svg_write_char(f, cur->ch);
+                    c++;
+                }
+                fprintf(f, "</text>\n");
+            }
+        } else {
+            /* Light mode: colored rect per cell + white text */
+            for (int c = 0; c < grid->cols; c++) {
+                const GlifGridCell *cell = &grid->cells[r * grid->cols + c];
+                int x = c * cw;
+                fprintf(f, "<rect x=\"%d\" y=\"%d\" width=\"%d\" height=\"%d\" fill=\"rgb(%d,%d,%d)\"/>\n",
+                        x, y, cw, ch, cell->r, cell->g, cell->b);
+                if (cell->ch != ' ') {
+                    fprintf(f, "<text x=\"%d\" y=\"%d\" fill=\"#fff\">", x, y);
+                    svg_write_char(f, cell->ch);
+                    fprintf(f, "</text>\n");
+                }
+            }
+        }
+    }
+
+    fprintf(f, "</svg>\n");
+    fclose(f);
+    return 0;
+}
+
 int glif_ppm_pipe_init(GlifPpmPipe *pp, const GlifGrid *grid, const GlifCharDatabase *db,
                   int scale, int dark_mode) {
     if (scale < 1) scale = 1;
@@ -288,6 +421,8 @@ int glif_ppm_pipe_init(GlifPpmPipe *pp, const GlifGrid *grid, const GlifCharData
     pp->img_w = (size_t)grid->cols * (size_t)pp->rw;
     pp->img_h = (size_t)grid->rows * (size_t)pp->rh;
 
+    if (pp->img_w > 0 && pp->img_h > SIZE_MAX / pp->img_w) return -1;
+    if (pp->img_w * pp->img_h > SIZE_MAX / 3) return -1;
     pp->pixels = calloc(pp->img_w * pp->img_h, 3);
     if (!pp->pixels) return -1;
 

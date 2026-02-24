@@ -27,18 +27,34 @@ static const char *vp_frag_src =
     "uniform sampler2D u_charGrid;\n"
     "uniform sampler2D u_colorGrid;\n"
     "uniform sampler2D u_fontAtlas;\n"
+    "uniform sampler2D u_videoFrame;\n"
     "uniform vec2 u_gridSize;\n"
     "uniform vec2 u_atlasGrid;\n"
     "uniform vec2 u_cellSize;\n"
     "uniform vec2 u_resolution;\n"
     "uniform vec2 u_offset;\n"
     "uniform float u_hdrIntensity;\n"
+    "uniform float u_compareMode;\n"
+    "uniform float u_splitPos;\n"
     "void main() {\n"
     "    vec2 fragCoord = vec2(gl_FragCoord.x, u_resolution.y - gl_FragCoord.y);\n"
     "    vec2 gridCoord = fragCoord - u_offset;\n"
     "    vec2 cellCoord = floor(gridCoord / u_cellSize);\n"
+    "    vec2 gridTotalSize = u_gridSize * u_cellSize;\n"
+    "    vec2 videoUV = gridCoord / gridTotalSize;\n"
     "    if (cellCoord.x < 0.0 || cellCoord.y < 0.0 ||\n"
-    "        cellCoord.x >= u_gridSize.x || cellCoord.y >= u_gridSize.y) discard;\n"
+    "        cellCoord.x >= u_gridSize.x || cellCoord.y >= u_gridSize.y) {\n"
+    "        if (u_compareMode > 0.5 &&\n"
+    "            videoUV.x >= 0.0 && videoUV.x <= 1.0 &&\n"
+    "            videoUV.y >= 0.0 && videoUV.y <= 1.0) {\n"
+    "            float edge = smoothstep(u_splitPos - 0.003, u_splitPos + 0.003, videoUV.x);\n"
+    "            gl_FragColor = mix(texture2D(u_videoFrame, videoUV), vec4(0,0,0,1), edge);\n"
+    "            float linePx = abs(gridCoord.x - u_splitPos * gridTotalSize.x);\n"
+    "            if (linePx < 1.5) gl_FragColor = vec4(0.29, 0.62, 1.0, 1.0);\n"
+    "            return;\n"
+    "        }\n"
+    "        discard;\n"
+    "    }\n"
     "    vec2 cellUV = (cellCoord + 0.5) / u_gridSize;\n"
     "    float charIdx = texture2D(u_charGrid, cellUV).r * 255.0;\n"
     "    vec3 color = texture2D(u_colorGrid, cellUV).rgb;\n"
@@ -54,7 +70,15 @@ static const char *vp_frag_src =
     "        float luma = dot(color, vec3(0.2126, 0.7152, 0.0722));\n"
     "        color = mix(vec3(luma), color, 1.0 + u_hdrIntensity * 0.3);\n"
     "    }\n"
-    "    gl_FragColor = vec4(color * alpha, 1.0);\n"
+    "    vec4 asciiColor = vec4(color * alpha, 1.0);\n"
+    "    if (u_compareMode > 0.5) {\n"
+    "        float edge = smoothstep(u_splitPos - 0.003, u_splitPos + 0.003, videoUV.x);\n"
+    "        gl_FragColor = mix(texture2D(u_videoFrame, videoUV), asciiColor, edge);\n"
+    "        float linePx = abs(gridCoord.x - u_splitPos * gridTotalSize.x);\n"
+    "        if (linePx < 1.5) gl_FragColor = vec4(0.29, 0.62, 1.0, 1.0);\n"
+    "    } else {\n"
+    "        gl_FragColor = asciiColor;\n"
+    "    }\n"
     "}\n";
 
 /* ── Atlas constants ── */
@@ -71,7 +95,10 @@ typedef struct {
     GLuint atlas_tex;
     GLuint char_tex;
     GLuint color_tex;
+    GLuint video_tex;
     int atlas_cell_w, atlas_cell_h;
+    int compare_mode;      /* 0 = off, 1 = split */
+    float split_pos;       /* 0.0..1.0 */
 } VpRenderState;
 
 /* ── Helpers ── */
@@ -124,6 +151,16 @@ static inline void vp_state_init(VpRenderState *vp) {
     vp->color_tex = vp_create_data_texture();
     vp->atlas_cell_w = 0;
     vp->atlas_cell_h = 0;
+
+    /* Video texture for compare overlay (GL_LINEAR for smooth scaling) */
+    glGenTextures(1, &vp->video_tex);
+    glBindTexture(GL_TEXTURE_2D, vp->video_tex);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    vp->compare_mode = 0;
+    vp->split_pos = 0.5f;
 }
 
 /* ── Font atlas ── */
@@ -244,6 +281,14 @@ static inline void vp_draw(VpRenderState *vp,
                 offset_x, offset_y);
     glUniform1f(glGetUniformLocation(vp->program, "u_hdrIntensity"),
                 hdr_intensity);
+
+    glActiveTexture(GL_TEXTURE3);
+    glBindTexture(GL_TEXTURE_2D, vp->video_tex);
+    glUniform1i(glGetUniformLocation(vp->program, "u_videoFrame"), 3);
+    glUniform1f(glGetUniformLocation(vp->program, "u_compareMode"),
+                (float)vp->compare_mode);
+    glUniform1f(glGetUniformLocation(vp->program, "u_splitPos"),
+                vp->split_pos);
 
     glDrawArrays(GL_TRIANGLES, 0, 6);
     glDisableVertexAttribArray((GLuint)a_pos);

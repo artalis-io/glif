@@ -1,4 +1,5 @@
 #include "contrast.h"
+#include "quickselect.h"
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
@@ -20,40 +21,7 @@ static float cell_luminance(const GlifGridCell *cell) {
            / 255.0f;
 }
 
-/* Quickselect: find k-th smallest element in arr[0..n-1]. Modifies arr.
- * NaN values are moved to the end to prevent infinite loops. */
-static float quickselect(float *arr, int n, int k) {
-    /* Filter NaN to end */
-    int valid = n;
-    for (int i = 0; i < valid; ) {
-        if (arr[i] != arr[i]) { /* NaN */
-            valid--;
-            arr[i] = arr[valid];
-        } else {
-            i++;
-        }
-    }
-    if (valid == 0) return 0.0f;
-    if (k >= valid) k = valid - 1;
-
-    int lo = 0, hi = valid - 1;
-    while (lo < hi) {
-        float pivot = arr[lo + (hi - lo) / 2];
-        int i = lo, j = hi;
-        while (i <= j) {
-            while (arr[i] < pivot) i++;
-            while (arr[j] > pivot) j--;
-            if (i <= j) {
-                float tmp = arr[i]; arr[i] = arr[j]; arr[j] = tmp;
-                i++; j--;
-            }
-        }
-        if (k <= j) hi = j;
-        else if (k >= i) lo = i;
-        else break;
-    }
-    return arr[k];
-}
+#define quickselect glif_quickselect
 
 void glif_contrast_analyze_frame(GlifAdaptiveContrast *ac, const GlifGrid *grid) {
     if (!ac || ac->floor < 0.0f) return;
@@ -70,11 +38,41 @@ void glif_contrast_analyze_frame(GlifAdaptiveContrast *ac, const GlifGrid *grid)
 #ifdef _OPENMP
     #pragma omp parallel for reduction(+:sum) schedule(static)
 #endif
+#if USE_WASM_SIMD
+    {
+        v128_t wr = wasm_f32x4_splat(0.2126f / 255.0f);
+        v128_t wg = wasm_f32x4_splat(0.7152f / 255.0f);
+        v128_t wb = wasm_f32x4_splat(0.0722f / 255.0f);
+        v128_t vsum = wasm_f32x4_splat(0.0f);
+        int i = 0, n4 = n & ~3;
+        for (; i < n4; i += 4) {
+            v128_t r = wasm_f32x4_make((float)cells[i].r, (float)cells[i+1].r,
+                                       (float)cells[i+2].r, (float)cells[i+3].r);
+            v128_t g = wasm_f32x4_make((float)cells[i].g, (float)cells[i+1].g,
+                                       (float)cells[i+2].g, (float)cells[i+3].g);
+            v128_t b = wasm_f32x4_make((float)cells[i].b, (float)cells[i+1].b,
+                                       (float)cells[i+2].b, (float)cells[i+3].b);
+            v128_t lum = wasm_f32x4_add(wasm_f32x4_add(wasm_f32x4_mul(r, wr),
+                                                         wasm_f32x4_mul(g, wg)),
+                                         wasm_f32x4_mul(b, wb));
+            wasm_v128_store(lums + i, lum);
+            vsum = wasm_f32x4_add(vsum, lum);
+        }
+        float tmp[4]; wasm_v128_store(tmp, vsum);
+        sum = tmp[0] + tmp[1] + tmp[2] + tmp[3];
+        for (; i < n; i++) {
+            float l = cell_luminance(&cells[i]);
+            lums[i] = l;
+            sum += l;
+        }
+    }
+#else
     for (int i = 0; i < n; i++) {
         float l = cell_luminance(&cells[i]);
         lums[i] = l;
         sum += l;
     }
+#endif
     ac->frame_avg = sum / (float)n;
 
     /* Quickselect is O(n) vs qsort's O(n log n) for percentiles.

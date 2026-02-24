@@ -1,6 +1,7 @@
 #include "glif.h"
 #include "output.h"
 #include "miniz.h"
+#include <limits.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -41,7 +42,10 @@ int glif_reader_open(GlifReader *gr, const uint8_t *data, size_t len) {
     gr->header.reserved[0] = data[22];
     gr->header.reserved[1] = data[23];
 
-    gr->cells = (int)gr->header.cols * (int)gr->header.rows;
+    int cols = (int)gr->header.cols;
+    int rows = (int)gr->header.rows;
+    if (cols > 0 && rows > INT_MAX / cols) return -1;
+    gr->cells = cols * rows;
 
     if (gr->header.frames == 0) {
         gr->index = NULL;

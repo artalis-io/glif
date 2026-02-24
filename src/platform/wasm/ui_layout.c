@@ -6,6 +6,7 @@
 #define MOBILE_BREAKPOINT 480
 #define WRAP_BREAKPOINT 768
 #define CONTROLS_H 120
+#define MEDIA_BAR_H 44
 
 /* Forward-declared element IDs */
 static const Clay_Color bg_dark   = { 26, 26, 26, 255 };
@@ -22,14 +23,16 @@ Clay_Dimensions ui_measure_text(Clay_StringSlice text,
     return (Clay_Dimensions){ w, h };
 }
 
-void ui_layout_build(UiLayout *layout, int canvas_w, int canvas_h) {
+void ui_layout_build(UiLayout *layout, int canvas_w, int canvas_h,
+                     int has_content, int video_mode) {
     memset(layout, 0, sizeof(*layout));
+    (void)video_mode; /* reserved for future per-mode layout differences */
     layout->is_mobile = canvas_w < MOBILE_BREAKPOINT;
     layout->toolbar_wrap = !layout->is_mobile && canvas_w < WRAP_BREAKPOINT;
 
     if (!layout->is_mobile) {
         int tb_h = layout->toolbar_wrap ? TOOLBAR_H_WRAP : TOOLBAR_H;
-        /* Desktop: toolbar on top, viewport fills remaining space */
+        /* Desktop: toolbar on top, viewport fills remaining, media bar at bottom */
         CLAY(CLAY_ID("Root"), {
             .layout = {
                 .sizing = {
@@ -86,9 +89,22 @@ void ui_layout_build(UiLayout *layout, int canvas_w, int canvas_h) {
                 },
                 .backgroundColor = bg_dark,
             }) {}
+
+            /* Media bar at bottom (only when content is loaded) */
+            if (has_content) {
+                CLAY(CLAY_ID("MediaBar"), {
+                    .layout = {
+                        .sizing = {
+                            .width = CLAY_SIZING_GROW(0),
+                            .height = CLAY_SIZING_FIXED(MEDIA_BAR_H),
+                        },
+                    },
+                    .backgroundColor = bg_toolbar,
+                }) {}
+            }
         }
     } else {
-        /* Mobile: viewport on top, controls at bottom */
+        /* Mobile: viewport on top, controls at bottom, media bar below controls */
         CLAY(CLAY_ID("Root"), {
             .layout = {
                 .sizing = {
@@ -136,6 +152,19 @@ void ui_layout_build(UiLayout *layout, int canvas_w, int canvas_h) {
                     .textColor = text_color,
                 }));
             }
+
+            /* Media bar below controls (only when content is loaded) */
+            if (has_content) {
+                CLAY(CLAY_ID("MediaBar"), {
+                    .layout = {
+                        .sizing = {
+                            .width = CLAY_SIZING_GROW(0),
+                            .height = CLAY_SIZING_FIXED(MEDIA_BAR_H),
+                        },
+                    },
+                    .backgroundColor = bg_toolbar,
+                }) {}
+            }
         }
     }
 
@@ -150,4 +179,7 @@ void ui_layout_get_bounds(UiLayout *layout) {
     Clay_ElementData tb = Clay_GetElementData(
         layout->is_mobile ? CLAY_ID("Controls") : CLAY_ID("Toolbar"));
     if (tb.found) layout->toolbar = tb.boundingBox;
+
+    Clay_ElementData mb = Clay_GetElementData(CLAY_ID("MediaBar"));
+    if (mb.found) layout->media_bar = mb.boundingBox;
 }

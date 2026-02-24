@@ -34,6 +34,12 @@ void glif_frame_diff_free(GlifFrameDiff *fd);
 int glif_output_ppm(const GlifGrid *grid, const GlifCharDatabase *db,
                const char *path, int scale, int dark_mode);
 
+/* Write SVG image file using text elements with embedded @font-face.
+ * dark_mode: 0 = colored rect background + white text
+ *            1 = black background + colored text */
+int glif_output_svg(const GlifGrid *grid, const GlifCharDatabase *db,
+                    const char *path, int dark_mode);
+
 /* Streaming PPM renderer for video mode — writes PPM frames to stdout.
  * Reuses allocated buffers across frames. */
 typedef struct {

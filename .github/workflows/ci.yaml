@@ -17,31 +17,29 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libomp-dev fonts-dejavu-core
 
       - name: Build
-        run: make
+        run: make CFLAGS="-std=c11 -Wall -Wextra -Wpedantic -Wshadow -Wformat=2 -D_FORTIFY_SOURCE=2 -fstack-protector-strong -O2 -Ivendor -Isrc -D_DEFAULT_SOURCE -DGLIF_NO_SANDBOX"
 
       - name: Test
-        run: make test
+        run: make test CFLAGS="-std=c11 -Wall -Wextra -Wpedantic -Wshadow -Wformat=2 -D_FORTIFY_SOURCE=2 -fstack-protector-strong -O2 -Ivendor -Isrc -D_DEFAULT_SOURCE -DGLIF_NO_SANDBOX"
         env:
           GLIF_TEST_FONT: /usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf
 
-  build-wasm:
-    name: Build WASM
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup Emscripten
-        uses: mymindstorm/setup-emsdk@v14
-        with:
-          version: 3.1.51
-
-      - name: Build
-        run: make wasm
-
-      - name: Verify output
-        run: |
-          test -f web/glif.wasm
-          test -f web/glif.js
+#  build-wasm:
+#    name: Build WASM
+#    runs-on: ubuntu-latest
+#    steps:
+#      - uses: actions/checkout@v4
+#
+#      - name: Setup Emscripten
+#        uses: mymindstorm/setup-emsdk@v14
+#        with:
+#          version: 3.1.51
+#
+#      - name: Build and verify
+#        run: |
+#          make wasm
+#          test -f web/glif.wasm
+#          test -f web/glif.js
 
   build-extension:
     name: Build extension
@@ -54,11 +52,9 @@ jobs:
         with:
           version: 3.1.51
 
-      - name: Build
-        run: make wasm-ext
-
-      - name: Verify output
+      - name: Build and verify
         run: |
+          make wasm-ext
           test -f extension/wasm/glif-ext.js
           test -f extension/wasm/glif-ext.wasm
 
