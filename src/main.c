@@ -17,6 +17,9 @@
 #ifdef __linux__
 #include "platform/linux/v4l2_output.h"
 #endif
+#if defined(__linux__) && !defined(GLIF_NO_SANDBOX)
+#include "sandbox.h"
+#endif
 
 typedef struct {
     const char *input_path;
@@ -805,8 +808,7 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-#if defined(__OpenBSD__) || defined(__linux__)
-    #include "sandbox.h"
+#if defined(__linux__) && !defined(GLIF_NO_SANDBOX)
     /* Unveil only the paths this invocation needs */
     if (cfg.font_path)
         glif_unveil(cfg.font_path, "r");

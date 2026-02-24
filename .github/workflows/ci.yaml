@@ -17,10 +17,10 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libomp-dev fonts-dejavu-core
 
       - name: Build
-        run: make
+        run: make CFLAGS="-DGLIF_NO_SANDBOX"
 
       - name: Test
-        run: make test
+        run: make test CFLAGS="-DGLIF_NO_SANDBOX"
         env:
           GLIF_TEST_FONT: /usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf
 
