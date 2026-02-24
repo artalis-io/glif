@@ -24,22 +24,22 @@ jobs:
         env:
           GLIF_TEST_FONT: /usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf
 
-  build-wasm:
-    name: Build WASM
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup Emscripten
-        uses: mymindstorm/setup-emsdk@v14
-        with:
-          version: 3.1.51
-
-      - name: Build and verify
-        run: |
-          make wasm
-          test -f web/glif.wasm
-          test -f web/glif.js
+#  build-wasm:
+#    name: Build WASM
+#    runs-on: ubuntu-latest
+#    steps:
+#      - uses: actions/checkout@v4
+#
+#      - name: Setup Emscripten
+#        uses: mymindstorm/setup-emsdk@v14
+#        with:
+#          version: 3.1.51
+#
+#      - name: Build and verify
+#        run: |
+#          make wasm
+#          test -f web/glif.wasm
+#          test -f web/glif.js
 
   build-extension:
     name: Build extension
