@@ -92,3 +92,88 @@ The GPU is used only for rendering (WebGL font-atlas shader), where it handles m
 | Render (diff-based ANSI) | ~0.17 ms/frame |
 | Terminal parsing (bottleneck) | ~35 ms/frame |
 | PPM pipe render | ~18 ms/frame |
+
+---
+
+## Local Proxy Server (In Progress)
+
+### Problem
+
+CORS prevents fetching video directly from external URLs in the browser. The previous YouTube paste-to-capture workflow required:
+1. Popup + YouTube embed
+2. Manual tab selection via `getDisplayMedia()`
+3. User interaction for each capture session
+
+This never worked reliably and has been removed.
+
+### Solution
+
+Add a built-in HTTP proxy server that:
+1. Runs alongside glif CLI (`--proxy` flag)
+2. Fetches video URLs server-side (no CORS)
+3. Streams frames to the web UI via MJPEG
+4. Web UI sends frames to existing glif WASM pipeline
+
+**Orthogonal**: Uses keel as a library. No changes to core pipeline (image/grid/sampling/contrast/match/blip).
+
+### Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                        glif CLI + Server                        │
+│                                                                  │
+│  ┌────────────────┐      ┌──────────────────────────────────┐  │
+│  │  Main CLI      │      │  HTTP Server (keel-based)       │  │
+│  │  (existing)   │      │  ┌────────────────────────────┐  │  │
+│  │                │      │  │ /proxy/stream?url=...    │  │  │
+│  │                │─────▶│  │ (fetch video, stream mjpeg)│  │  │
+│  └────────────────┘      │  └────────────────────────────┘  │  │
+│         │                └──────────────────────────────────┘  │
+│         │                              │                         │
+└─────────┼──────────────────────────────┼─────────────────────────┘
+          │                              │
+          │                       HTTP (no CORS)
+          ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                      glif Web UI (browser)                      │
+│                                                                  │
+│  ┌──────────────┐    ┌──────────────┐    ┌──────────────────┐  │
+│  │ frameproxy.js│───▶│ glif WASM   │───▶│ WebGL viewport   │  │
+│  │ (new)        │    │ pipeline    │    │ (existing)       │  │
+│  └──────────────┘    └──────────────┘    └──────────────────┘  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Files to Create/Modify
+
+| File | Action |
+|------|--------|
+| `src/proxy — header |
+|.h` | Create `src/proxy.c` | Create — implementation using keel |
+| `Makefile` | Modify — add proxy.o, link libkeel.a |
+| `src/main.c` | Modify — add `--proxy` flag + server init |
+| `web/frameproxy.js` | Create — client |
+| `web/glif-app.js` | Modify — integrate proxy source |
+| `web/index.html` | Modify — add URL input |
+| `tests/test_proxy.c` | Create — unit tests |
+
+### API Design
+
+```
+GET /proxy/stream?url=https://youtube.com/watch?v=XXX
+→ Response: multipart/x-mixed-replace (MJPEG stream)
+
+GET /proxy/available
+→ Response: {"available": true}
+```
+
+### Testing Strategy
+
+1. **test_proxy.c** — Test proxy module in isolation:
+   - URL parsing
+   - Health check endpoint
+   - Frame extraction
+
+2. **frameproxy.js** — Unit test with mock server
+
+3. **Integration** — Existing pipeline tests unchanged
