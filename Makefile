@@ -24,6 +24,7 @@ ifeq ($(UNAME_S),Linux)
 endif
 
 # Pledge/unveil sandboxing (Linux only — OpenBSD has native support)
+# Note: Requires -D_GNU_SOURCE for CLONE_* and F_OFD_* constants
 PLEDGE_OBJ =
 ifeq ($(UNAME_S),Linux)
   PLEDGE_SRC = vendor/pledge/libc/calls/pledge.c \
@@ -41,7 +42,7 @@ ifeq ($(UNAME_S),Linux)
                vendor/pledge/libc/str/isabspath.c \
                vendor/pledge/libc/fmt/joinpaths.c
   PLEDGE_OBJ = $(PLEDGE_SRC:.c=.o)
-  CFLAGS += -Ivendor/pledge
+  CFLAGS += -Ivendor/pledge -D_GNU_SOURCE
 endif
 
 # Debug build with sanitizers (no OpenMP — conflicts with ASan)
