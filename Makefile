@@ -64,11 +64,11 @@ LIB_OBJ = src/image.o src/sampling.o src/grid.o src/font.o \
            src/contrast.o src/match.o src/output.o src/temporal.o src/compress.o \
            src/glif.o src/blip.o vendor/miniz.o
 
-# Linux-only: v4l2 output
+# Linux-only: v4l2 output + sandbox
 UNAME := $(shell uname)
 ifeq ($(UNAME), Linux)
-  SRC += src/platform/linux/v4l2_output.c
-  LIB_OBJ += src/platform/linux/v4l2_output.o
+  SRC += src/platform/linux/v4l2_output.c src/sandbox.c
+  LIB_OBJ += src/platform/linux/v4l2_output.o src/sandbox.o
 endif
 
 TESTS = tests/test_vec6 tests/test_sampling tests/test_image \
